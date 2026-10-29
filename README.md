@@ -30,23 +30,47 @@ A text scanner only reads the page. Most real leaks are not on the page.
 
 ## Quickstart
 
-```bash
-python -m pip install -r requirements.txt
-python -m pip install spacy && python -m spacy download en_core_web_sm   # optional, see below
+Two commands. The first builds a synthetic clinic with 60 hidden leaks and scans
+it; nothing real is touched, and no patient data exists anywhere in the output.
 
-python fixtures/build_world.py      # builds a synthetic clinic with 60 hidden leaks
-python tools/check_detect.py        # the scanner should find all 60, with no false alarms
+```bash
+python -m pip install pyyaml
+python -m phi_scan.cli demo
 ```
 
-That is the whole demo. `build_world.py` writes a patient website, an API, a
-database dump, a PDF, a DICOM file and an answer key, all synthetic and
-deterministic.
+You get a report like:
 
-Serve it and scan it live:
+```
+phi-scan  -  possible PHI exposure, needs compliance review
+target      fixtures/world
+findings    60
+levels      critical 55   high 5
+
+CRITICAL  -  anyone could see this
+  api/patient_1042.json    api_response   ******3836
+                           id:names,mrn,dates  grade:B  bytes:214+10
+```
+
+Scan something of your own:
 
 ```bash
-python fixtures/serve.py            # http://127.0.0.1:8801
-python tools/check_crawl.py         # crawls it: one host, GET only, robots obeyed
+python -m phi_scan.cli scan --source ./my-export --out ./artifacts/mine
+python -m phi_scan.cli crawl --url https://example.com --out ./artifacts/site
+```
+
+The NLP model is optional. Without it the scanner falls back to regex names and
+loses roughly 10 points of recall on prose; structured data does not need it.
+
+```bash
+python -m pip install spacy && python -m spacy download en_core_web_sm
+```
+
+### Verify the whole thing
+
+```bash
+python tools/check_detect.py     # 60/60, zero false alarms
+python tools/lint_policy.py      # 11 quotes still match the source text
+python tools/check_ai.py         # the AI layer cannot make it worse
 ```
 
 ### Using it as a library
