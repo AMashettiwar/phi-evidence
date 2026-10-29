@@ -1,0 +1,178 @@
+# The fixed list of rules the bot may cite.
+#
+# A rule that is not in this file cannot be used. Every quote below was copied
+# out of the official eCFR text downloaded by tools/fetch_sources.py and is
+# re-checked against it on every run. Whitespace is collapsed, wording is exact.
+#
+# contested: true means the law is not settled in court, so the report says
+# "contested risk" and does not claim a clear breach.
+
+meta:
+  count: 12
+  version: 2
+  quote_policy: >
+    A finding may only cite an id in this file. Every quote must appear in the
+    stored source text for its source_key. No invented citations, ever.
+
+rules:
+  - id: phi_definition
+    title: What counts as protected health information
+    citation: "45 CFR 160.103"
+    source_key: phi_definition
+    plain_meaning: >
+      Health information counts as protected when it is about a person's past,
+      present, or future health, care, or payment, and it either names them or
+      could reasonably be used to work out who they are.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-160/subpart-A/section-160.103"
+    contested: false
+    quote: "Protected health information means individually identifiable health information:"
+    quote_status: verified
+
+  - id: expert_determination
+    title: The risk test for identifiability
+    citation: "45 CFR 164.514(b)(1)"
+    source_key: expert_determination
+    plain_meaning: >
+      A person with proper knowledge can decide data is de-identified if there is
+      only a very small risk that someone could use it to identify a person. This
+      is a judgement about risk, not a checklist.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.514"
+    contested: false
+    quote: "(1) A person with appropriate knowledge of and experience with generally accepted statistical and scientific principles and methods for rendering information not individually identifiable:"
+    quote_status: verified
+
+  - id: safe_harbor
+    title: The 18 identifiers to remove
+    citation: "45 CFR 164.514(b)(2)(i)"
+    source_key: safe_harbor
+    plain_meaning: >
+      Data is treated as de-identified if all 18 listed identifiers are removed
+      and nothing else suggests who the person is.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.514"
+    contested: false
+    quote: "(2)(i) The following identifiers of the individual or of relatives, employers, or household members of the individual, are removed:"
+    quote_status: verified
+
+  - id: actual_knowledge
+    title: No known leftovers
+    citation: "45 CFR 164.514(b)(2)(ii)"
+    source_key: actual_knowledge
+    plain_meaning: >
+      Even with all 18 removed, if the organisation knows the remaining details
+      could still point to a person, the data is not de-identified. This cannot be
+      automated, so the bot only ever says "needs review".
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.514"
+    contested: false
+    quote: "(ii) The covered entity does not have actual knowledge that the information could be used alone or in combination with other information to identify an individual who is a subject of the information."
+    quote_status: verified
+
+  - id: permitted_disclosure
+    title: When sharing health information is allowed
+    citation: "45 CFR 164.502(a)"
+    source_key: permitted_disclosure
+    plain_meaning: >
+      Health information may only be shared for the reasons the rule allows, or
+      with the person's written permission. Sharing outside those reasons is the
+      core problem the bot is looking for.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.502"
+    contested: false
+    quote: "(a) Standard. A covered entity or business associate may not use or disclose protected health information, except as permitted or required by this subpart or by subpart C of part 160 of this subchapter."
+    quote_status: verified
+
+  - id: reproductive_health
+    title: Extra protection for reproductive health data
+    citation: "45 CFR 164.502(a)(5)(iii)"
+    source_key: reproductive_health
+    plain_meaning: >
+      Reproductive health information has extra limits on when it may be shared,
+      including for legal reasons. Findings in this area get a higher sensitivity
+      tag.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.502"
+    contested: false
+    quote: "(1) To conduct a criminal, civil, or administrative investigation into any person for the mere act of seeking, obtaining, providing, or facilitating reproductive health care."
+    quote_status: verified
+
+  - id: transmission_security
+    title: Protecting data while it travels
+    citation: "45 CFR 164.312(e)(1)"
+    source_key: transmission_security
+    plain_meaning: >
+      Technical safeguards must protect health information while it is being sent
+      over a network. Sending it to an outside company without protection relates
+      to this rule.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C/section-164.312"
+    contested: true
+    contested_note: >
+      In June 2024 a federal court vacated part of the HHS guidance that treated
+      an IP address plus a visit to a public health page as identifiable, in
+      American Hospital Association v. Becerra. HHS did not appeal. So for public
+      pages the bot reports this as contested risk, not a settled breach.
+    quote: "(e)(1) Standard: Transmission security. Implement technical security measures to guard against unauthorized access to electronic protected health information that is being transmitted over an electronic communications network."
+    quote_status: verified
+
+  - id: access_control_audit
+    title: Only the right people, and keep a record
+    citation: "45 CFR 164.312(a),(b)"
+    source_key: access_control_audit
+    plain_meaning: >
+      Systems must limit who can see health information and must keep logs of who
+      looked at what. Seeing another patient's record when logged in as yourself
+      relates to this rule.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C/section-164.312"
+    contested: false
+    quote: "(a)(1) Standard: Access control. Implement technical policies and procedures for electronic information systems that maintain electronic protected health information to allow access only to those persons or software programs that have been granted access rights"
+    quote_status: verified
+
+  - id: activity_review
+    title: Watch the logs for problems
+    citation: "45 CFR 164.308(a)(1)(ii)(D)"
+    source_key: activity_review
+    plain_meaning: >
+      Organisations must review their activity logs for signs of improper access.
+      A leak that only appears in logs is still a leak.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C/section-164.308"
+    contested: false
+    quote: "(D) Information system activity review (Required). Implement procedures to regularly review records of information system activity, such as audit logs, access reports, and security incident tracking reports."
+    quote_status: verified
+
+  - id: accounting_of_disclosures
+    title: Be able to list who received what
+    citation: "45 CFR 164.528"
+    source_key: accounting_of_disclosures
+    plain_meaning: >
+      Patients can ask who their information was shared with. If data is being
+      sent to outside companies, the organisation has to be able to account for it.
+    url: "https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-E/section-164.528"
+    contested: false
+    quote: "(a) Standard: Right to an accounting of disclosures of protected health information. (1) An individual has a right to receive an accounting of disclosures of protected health information made by a covered entity in the six years prior to the date on which the accounting is requested, except for disclosures:"
+    quote_status: verified
+
+  - id: part2_sud
+    title: Substance use treatment records are stricter
+    citation: "42 CFR Part 2"
+    source_key: part2_sud
+    plain_meaning: >
+      Records from drug and alcohol treatment programmes have their own federal
+      rules that are stricter than HIPAA. A finding touching this area gets the
+      highest sensitivity tag.
+    url: "https://www.ecfr.gov/current/title-42/chapter-I/subchapter-A/part-2"
+    contested: false
+    quote: "(i) Would identify a patient as having or having had a substance use disorder either directly, by reference to publicly available information, or through verification of such identification by another person; and"
+    quote_status: verified
+
+  - id: gina
+    title: Genetic information has its own law
+    citation: "Genetic Information Nondiscrimination Act of 2008"
+    source_key: null
+    plain_meaning: >
+      Genetic information is protected separately from HIPAA, including in
+      employment and insurance settings. Genomic results get an extra sensitivity
+      tag and a second rule reference.
+    url: "https://www.eeoc.gov/laws/statutes/gina"
+    contested: false
+    quote: null
+    quote_status: not_required
+    why_no_quote: >
+      This is a statute, not a regulation in eCFR, so it is not fetched by the
+      source script. It is carried as a supplementary citation with no quote
+      until someone pins an official text. No quote is better than a guessed one.

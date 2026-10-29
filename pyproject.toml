@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phi-scan"
+version = "0.1.0"
+description = "Read-only scanner that finds patient data exposed by a website or health system, and explains each finding in plain English."
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.optional-dependencies]
+nlp = ["spacy>=3.7"]
+
+[project.scripts]
+phi-scan = "phi_scan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["phi_scan*"]

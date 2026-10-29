@@ -1,0 +1,226 @@
+# The 18 identifiers from 45 CFR 164.514(b)(2)(i).
+#
+# Read this carefully: this is a list of things HIPAA says to REMOVE before you
+# may call data "de-identified". It is a removal list. It is NOT a complete list
+# of everything that can identify a person. That is why the bot also has a
+# separate risk check (see rules.yaml, expert_determination).
+#
+# always_flag: true means the bot must flag it even when it stands alone with no
+# health detail next to it, and the AI is never allowed to clear it.
+
+meta:
+  citation: "45 CFR 164.514(b)(2)(i)(A)-(R)"
+  rule_id: safe_harbor
+  count: 18
+  note: >
+    Safe harbor has a second half. Even after removing all 18, the covered entity
+    must have no actual knowledge that what is left could still identify someone
+    (164.514(b)(2)(ii)). That judgement cannot be automated, so the bot reports
+    it as "needs review" rather than deciding it.
+
+identifiers:
+  - key: names
+    letter: A
+    label: Names
+    citation: "164.514(b)(2)(i)(A)"
+    how_we_find: Name model plus a name list. Also catches shortened forms like "J. Smith".
+    must_pass_check: No checksum exists for a name, so a person confirms.
+    mask: keep_first_initial
+    mask_example: "J*** S****"
+    always_flag: false
+    severity: standard
+    note: Relative names count too (parent, spouse, child).
+
+  - key: geography
+    letter: B
+    label: Address, city, county, ZIP, and anything smaller than a state
+    citation: "164.514(b)(2)(i)(B)"
+    how_we_find: Address parser plus a ZIP list.
+    must_pass_check: The first 3 ZIP digits may stay, but only if the ZIP area holds more than 20,000 people.
+    mask: keep_state_only
+    mask_example: "******, CA"
+    always_flag: false
+    severity: standard
+    note: A street address alone is identifying. It does not need a health detail beside it to be a problem.
+
+  - key: dates
+    letter: C
+    label: Birth, admission, discharge, and death dates, and ages over 89
+    citation: "164.514(b)(2)(i)(C)"
+    how_we_find: Date parser in several formats, including day-first and month-first.
+    must_pass_check: Year may stay. Ages over 89 must collapse to "90 or older".
+    mask: keep_year
+    mask_example: "**/**/1985"
+    always_flag: false
+    severity: standard
+    note: A date is the strongest helper for re-identifying someone. Date plus ZIP plus age is often enough on its own.
+
+  - key: phone
+    letter: D
+    label: Telephone numbers
+    citation: "164.514(b)(2)(i)(D)"
+    how_we_find: Phone parser, US and foreign shapes.
+    must_pass_check: Numbers in 555-0100 to 555-0199 are fake and must not be flagged.
+    mask: keep_last4
+    mask_example: "***-***-1234"
+    always_flag: false
+    severity: standard
+
+  - key: fax
+    letter: E
+    label: Fax numbers
+    citation: "164.514(b)(2)(i)(E)"
+    how_we_find: Same parser as phone, plus the word "fax" nearby.
+    must_pass_check: Same fake-number rule as phone.
+    mask: keep_last4
+    mask_example: "***-***-1234"
+    always_flag: false
+    severity: standard
+
+  - key: email
+    letter: F
+    label: Email addresses
+    citation: "164.514(b)(2)(i)(F)"
+    how_we_find: Email parser.
+    must_pass_check: example.com, example.net, and example.org are reserved for fake use and must not be flagged.
+    mask: keep_domain
+    mask_example: "j***@e***.com"
+    always_flag: false
+    severity: standard
+
+  - key: ssn
+    letter: G
+    label: Social Security numbers
+    citation: "164.514(b)(2)(i)(G)"
+    how_we_find: Pattern, then a real format check.
+    must_pass_check: Area 000, 666, or 900-999 is invalid. Group 00 is invalid. Serial 0000 is invalid. Invalid ones are test data.
+    mask: keep_last4
+    mask_example: "***-**-1234"
+    always_flag: true
+    severity: always
+    note: Never cleared by the AI under any circumstance.
+
+  - key: mrn
+    letter: H
+    label: Medical record numbers
+    citation: "164.514(b)(2)(i)(H)"
+    how_we_find: Learn the site's own ID shape from examples, then match it everywhere.
+    must_pass_check: Must fit the site's observed pattern. A random number is not a medical record number.
+    mask: keep_last4
+    mask_example: "*****6789"
+    always_flag: true
+    severity: always
+    note: Never cleared by the AI under any circumstance.
+
+  - key: plan_id
+    letter: I
+    label: Health plan beneficiary numbers, including Medicare and Medicaid IDs
+    citation: "164.514(b)(2)(i)(I)"
+    how_we_find: Pattern plus known plan prefixes.
+    must_pass_check: Prefix must match a real plan format. A plan name alone is not an ID.
+    mask: keep_last4
+    mask_example: "******A1"
+    always_flag: true
+    severity: always
+    note: This is the "insurance ID" from your brief. Never cleared by the AI.
+
+  - key: account
+    letter: J
+    label: Account numbers
+    citation: "164.514(b)(2)(i)(J)"
+    how_we_find: Pattern plus a nearby billing word.
+    must_pass_check: Needs billing or account context to count.
+    mask: keep_last4
+    mask_example: "******4321"
+    always_flag: false
+    severity: standard
+
+  - key: license
+    letter: K
+    label: Certificate and license numbers
+    citation: "164.514(b)(2)(i)(K)"
+    how_we_find: Pattern plus state license formats.
+    must_pass_check: A doctor's license number on a staff page is not patient data.
+    mask: keep_last4
+    mask_example: "******99"
+    always_flag: false
+    severity: standard
+
+  - key: vehicle
+    letter: L
+    label: Vehicle IDs, serial numbers, and plates
+    citation: "164.514(b)(2)(i)(L)"
+    how_we_find: Pattern plus a VIN checksum.
+    must_pass_check: VIN check digit must pass, or it is not a real VIN.
+    mask: keep_last4
+    mask_example: "******1234"
+    always_flag: false
+    severity: standard
+
+  - key: device
+    letter: M
+    label: Device identifiers and serial numbers
+    citation: "164.514(b)(2)(i)(M)"
+    how_we_find: Pattern plus device context words. Also medical device UDI format.
+    must_pass_check: Model numbers are not device identifiers.
+    mask: keep_last4
+    mask_example: "******77"
+    always_flag: false
+    severity: standard
+
+  - key: url
+    letter: N
+    label: Web addresses
+    citation: "164.514(b)(2)(i)(N)"
+    how_we_find: URL parser. Looks inside the address, not just the page.
+    must_pass_check: A plain public page address is not identifying.
+    mask: redact_query
+    mask_example: "https://site.test/portal?***"
+    always_flag: false
+    severity: context
+    note: This is where leaks hide most often. The address travels to logs, ads, and browser history.
+
+  - key: ip
+    letter: O
+    label: IP addresses
+    citation: "164.514(b)(2)(i)(O)"
+    how_we_find: IP parser, v4 and v6.
+    must_pass_check: Private ranges (10.x, 192.168.x) are not identifying. Test ranges are fake.
+    mask: keep_two_octets
+    mask_example: "203.0.***.***"
+    always_flag: false
+    severity: standard
+
+  - key: biometric
+    letter: P
+    label: Fingerprints and voice prints
+    citation: "164.514(b)(2)(i)(P)"
+    how_we_find: File type and metadata inspection.
+    must_pass_check: A stock photo of a hand is not a fingerprint.
+    mask: redact_all
+    mask_example: "[biometric file]"
+    always_flag: false
+    severity: high
+
+  - key: photo
+    letter: Q
+    label: Full-face photographs and similar images
+    citation: "164.514(b)(2)(i)(Q)"
+    how_we_find: Image detection plus face detection. Also checks photo metadata.
+    must_pass_check: Public staff headshots are not patient data.
+    mask: blur_face
+    mask_example: "[face blurred]"
+    always_flag: false
+    severity: standard
+
+  - key: other_unique
+    letter: R
+    label: Any other unique number, characteristic, or code
+    citation: "164.514(b)(2)(i)(R)"
+    how_we_find: Leftover high-entropy strings that nothing else claimed.
+    must_pass_check: Needs context. A random product code is not identifying.
+    mask: keep_last4
+    mask_example: "******XY"
+    always_flag: false
+    severity: context
+    note: The catch-all. It exists because the other 17 always miss something.

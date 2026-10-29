@@ -1,0 +1,43 @@
+# How serious a finding is.
+#
+# "standalone" means: this item is a finding even when nothing about health sits
+# next to it. Anything not listed here is only a finding when a health detail
+# appears in the same record (see policy/spec.md section 3).
+#
+# This file carries one direct instruction from the project owner: a street
+# address is a finding on its own. It is Medium, not Critical, because there is
+# no health detail attached to it.
+
+meta:
+  levels: [critical, high, medium, review]
+  default_standalone: none
+  note: >
+    Levels are ordered worst first. Every finding gets exactly one level. The
+    level is worked out by a fixed rule in code, never by the AI.
+
+standalone:
+  ssn: critical
+  mrn: critical
+  plan_id: critical
+  geography: medium
+
+# Categories that raise severity whenever they appear.
+heightened:
+  - key: hiv
+    label: HIV or AIDS status
+    rule: part2_sud
+  - key: mental_health
+    label: Mental health condition or treatment
+    rule: permitted_disclosure
+  - key: sud
+    label: Drug or alcohol treatment
+    rule: part2_sud
+  - key: reproductive
+    label: Reproductive health
+    rule: reproductive_health
+  - key: genetic
+    label: Genetic or genomic result
+    rule: gina
+  - key: oncology
+    label: Cancer diagnosis or treatment
+    rule: permitted_disclosure

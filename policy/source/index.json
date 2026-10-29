@@ -1,0 +1,137 @@
+{
+  "sections": [
+    {
+      "key": "phi_definition",
+      "title": 45,
+      "part": 160,
+      "section": "160.103",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=160&section=160.103",
+      "as_of": "2026-10-06",
+      "sha256": "dedbefef88e77bf32425e52d4b2d24ecebcfd1a8502678697f0d8c5507f48296",
+      "bytes": 24132,
+      "paragraphs": 168,
+      "probe_found": false
+    },
+    {
+      "key": "expert_determination",
+      "title": 45,
+      "part": 164,
+      "section": "164.514",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.514",
+      "as_of": "2026-10-06",
+      "sha256": "d5c3c56eaad9c43959234c938926195baaa96ae3833fb93847dbe56c40f95148",
+      "bytes": 18045,
+      "paragraphs": 111,
+      "probe_found": true
+    },
+    {
+      "key": "safe_harbor",
+      "title": 45,
+      "part": 164,
+      "section": "164.514",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.514",
+      "as_of": "2026-10-06",
+      "sha256": "d5c3c56eaad9c43959234c938926195baaa96ae3833fb93847dbe56c40f95148",
+      "bytes": 18045,
+      "paragraphs": 111,
+      "probe_found": true
+    },
+    {
+      "key": "actual_knowledge",
+      "title": 45,
+      "part": 164,
+      "section": "164.514",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.514",
+      "as_of": "2026-10-06",
+      "sha256": "d5c3c56eaad9c43959234c938926195baaa96ae3833fb93847dbe56c40f95148",
+      "bytes": 18045,
+      "paragraphs": 111,
+      "probe_found": true
+    },
+    {
+      "key": "permitted_disclosure",
+      "title": 45,
+      "part": 164,
+      "section": "164.502",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.502",
+      "as_of": "2026-10-06",
+      "sha256": "6373cb03e2b971b95e17a88ca57c4bec305607450ce6c203465fa52f61bfcfe5",
+      "bytes": 20852,
+      "paragraphs": 95,
+      "probe_found": true
+    },
+    {
+      "key": "reproductive_health",
+      "title": 45,
+      "part": 164,
+      "section": "164.502",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.502",
+      "as_of": "2026-10-06",
+      "sha256": "6373cb03e2b971b95e17a88ca57c4bec305607450ce6c203465fa52f61bfcfe5",
+      "bytes": 20852,
+      "paragraphs": 95,
+      "probe_found": true
+    },
+    {
+      "key": "transmission_security",
+      "title": 45,
+      "part": 164,
+      "section": "164.312",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.312",
+      "as_of": "2026-10-06",
+      "sha256": "2b70f9412aab6e47006ca7c73472115bad10b4c11d0cf6fcfc276a72ffaede71",
+      "bytes": 2401,
+      "paragraphs": 15,
+      "probe_found": true
+    },
+    {
+      "key": "access_control_audit",
+      "title": 45,
+      "part": 164,
+      "section": "164.312",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.312",
+      "as_of": "2026-10-06",
+      "sha256": "2b70f9412aab6e47006ca7c73472115bad10b4c11d0cf6fcfc276a72ffaede71",
+      "bytes": 2401,
+      "paragraphs": 15,
+      "probe_found": true
+    },
+    {
+      "key": "activity_review",
+      "title": 45,
+      "part": 164,
+      "section": "164.308",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.308",
+      "as_of": "2026-10-06",
+      "sha256": "e2dba35c5170360accbc9792a7e8d748f0bd33b9464b8929729de29de1a67a0a",
+      "bytes": 7414,
+      "paragraphs": 37,
+      "probe_found": true
+    },
+    {
+      "key": "accounting_of_disclosures",
+      "title": 45,
+      "part": 164,
+      "section": "164.528",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-06/title-45.xml?part=164&section=164.528",
+      "as_of": "2026-10-06",
+      "sha256": "475cb0fc84b98945aa9539b98467b075fffe40dac1ee4c79d8f14647eb4beaa5",
+      "bytes": 7656,
+      "paragraphs": 45,
+      "probe_found": true
+    },
+    {
+      "key": "part2_sud",
+      "title": 42,
+      "part": 2,
+      "section": "2.12",
+      "url": "https://www.ecfr.gov/api/versioner/v1/full/2026-10-13/title-42.xml?part=2&section=2.12",
+      "as_of": "2026-10-13",
+      "sha256": "2aacf91b88628d69e00c4e09c8c37599d8a8714eda4c720a3556582ab4a3a9a2",
+      "bytes": 13355,
+      "paragraphs": 38,
+      "probe_found": false
+    }
+  ],
+  "failures": []
+}
