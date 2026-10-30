@@ -110,3 +110,38 @@ No OCR. Text burned into pixels is still not read, and the report says so.
 
 Stating these is part of the deliverable. A scanner that claims complete coverage
 is one that has not been tested hard enough to find its own edges.
+
+## The blind exam score, and what it changed
+
+A separately written 43-document exam with 1,135 graded items — 537 patient
+identifiers, 547 traps, 51 excluded. Traps mean precision is measurable: NPI
+numbers, LOINC codes, eponyms, state abbreviations, bare years, measurements.
+
+| | Before | After |
+|---|---|---|
+| Recall | **9.5%** | **31.8%** |
+| Traps reported | 2 / 547 | 5 / 547 |
+| Findings | 27 | 53 |
+
+Even the improved number is poor, and it is a **contaminated** measurement: the
+fixes were written after reading the key, so it shows direction, not skill.
+
+Four causes, three now fixed:
+
+1. **Structure was flattened to text.** HL7, X12 and DICOM were parsed and the
+   labels thrown away, so `NGUYEN^LAN^THI` and `30118442` arrived as anonymous
+   strings. `phi_scan/structured.py` now reads these formats as labelled fields —
+   the tag number and the field position *are* the evidence.
+2. **Identifier shapes came from our own fixture.** We knew `MRN-123456` and
+   `1952-01-01`. Real records use bare digits, `02/14/1936`, `March 4, 2026`,
+   `19941102`. Added, plus ZIP beside a state code and bare 6-8 digit record
+   numbers when a named person is in the same record.
+3. **The reporting gate was narrower than the question.** A labelled identifier
+   now stands on its own; a diagnosis beside it is no longer required.
+4. **Obfuscation.** JWT payloads and URL-encoded values are decoded. Spelled-out
+   letters and digit-for-letter substitution are still missed, and pixels still
+   need OCR.
+
+The lesson generalises beyond this exam: **where a format carries its own labels,
+parse it. Never scan it.**
+

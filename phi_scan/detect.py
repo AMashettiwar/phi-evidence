@@ -102,6 +102,18 @@ SEP = r"[\s\u200b\u200c\u200d\u2060\ufeff]+"
 MRN = re.compile(r"(?<![A-Za-z0-9])MRN[-\s]?\d{3}[\s-]?\d{3,}\b", re.I)
 SSN = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
 DOB = re.compile(r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b")
+# Real records write dates in every shape there is. A detector that only knows
+# ISO 8601 misses most of them.
+DATE_US = re.compile(r"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:\d{4}|\d{2})\b")
+DATE_MONTH = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+"
+    r"\d{1,2},?\s+(?:19|20)\d{2}\b", re.I)
+DATE_COMPACT = re.compile(r"\b(?:19|20)\d{6}\b")
+# A bare 6-8 digit run is a record number when the same record names a person.
+# Ten digits is an NPI and five is a LOINC code, so both stay out.
+BARE_ID = re.compile(r"(?<![\d-])\d{6,8}(?![\d-])")
+# "DULUTH, MN 55803": a ZIP follows a two-letter state.
+ZIP_CODE = re.compile(r"\b[A-Z]{2}\s+(\d{5})\b")
 PHONE = re.compile(r"\(\d{3}\)\s*\d{3}-\d{4}\b")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
@@ -117,6 +129,7 @@ TITLE_WORD = rf"{WORD}\.?"
 # fails the stop list and takes "Emeka" with it, so the real name is never seen.
 # This cost two planted leaks and a regression at gate G5 before it was spotted.
 NAME = re.compile(rf"(?=\b({WORD}){SEP}({WORD})\b)")
+NAME_COMMA = re.compile(rf"\b({WORD}),{SEP}({WORD})\b")
 # Real prose names people with an honourific: "Mr Galip Yalman". Anchoring on
 # that is far more precise than capitalisation alone, and it recovers the name
 # when the surname follows a title the stop list would otherwise eat.
@@ -362,6 +375,21 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         candidates.append((2, start, end, f"{first} {last}"))
 
+    # "OKONKWO, ADAEZE" is the same person as "Adaeze Okonkwo". Two letters are
+    # rejected so a city/state pair ("Bangor, ME") is never read as a name.
+    for match in NAME_COMMA.finditer(text):
+        start, end = match.start(1), match.end(2)
+        last, first = match.group(1), match.group(2)
+        if not last[0].isupper() or not first[0].isupper():
+            continue
+        if len(first) < 3 or len(last) < 2:
+            continue
+        if last.lower() in NAME_STOP or first.lower() in NAME_STOP:
+            continue
+        if _abstract_noun(first) or any(ch.isdigit() for ch in last + first):
+            continue
+        candidates.append((2, start, end, f"{first} {last}"))
+
     # Drop anything the model says is an organisation or a place.
     surviving = [c for c in candidates if not _mostly_inside(c[1], c[2], blocked)]
 
@@ -455,6 +483,80 @@ def _key_identifiers(payload: object) -> tuple[list[str], list[str]]:
     return names, records
 
 
+# Label -> identifier class, for records that were read as fields.
+RECORD_LABELS = {
+    "name": "names", "provider": "names", "employer": "names",
+    "mrn": "mrn", "member": "mrn", "accession": "mrn", "license": "mrn",
+    "vehicle": "mrn", "device": "mrn",
+    "ssn": "ssn", "dob": "dates", "phone": "phone", "email": "email",
+    "address": "geo", "city": "geo", "zip": "geo", "url": "url",
+}
+# Most sensitive first, so the masked value shown is the worst one.
+RECORD_PRIORITY = ("ssn", "mrn", "member", "accession", "license", "name",
+                   "provider", "employer", "dob", "phone", "email",
+                   "address", "city", "zip", "url")
+
+
+def _variants(label: str, value: str) -> set[str]:
+    """Every form of a name a finding could legitimately be stored as."""
+    out = {value}
+    if label in ("name", "provider", "employer"):
+        if "^" in value:
+            parts = [p for p in value.split("^") if p]
+            if len(parts) >= 2:
+                last, first = parts[0], parts[1]
+                for combo in (f"{first} {last}", f"{last} {first}",
+                              f"{last}, {first}"):
+                    out.add(combo)
+                    out.add(combo.title())
+        if value.count(",") == 1:
+            last, first = [p.strip() for p in value.split(",")]
+            if last and first:
+                out.add(f"{first} {last}")
+        out.add(value.title())
+        out.add(value.lower())
+    return {v.strip() for v in out if v.strip()}
+
+
+def identifiers_from_record(text: str) -> dict:
+    """Read a labelled record: name=..., mrn=..., dob=..."""
+    found: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        label, _, raw = line.partition("=")
+        label = label.strip().lower()
+        raw = raw.strip()
+        if not raw or label not in RECORD_LABELS:
+            continue
+        found.setdefault(label, []).extend(_variants(label, raw))
+
+    keys: list[str] = []
+    values: list[str] = []
+    for label in RECORD_PRIORITY:
+        for value in found.get(label, []):
+            pool = RECORD_LABELS[label]
+            if pool not in keys:
+                keys.append(pool)
+            values.append(value)
+
+    primary = ""
+    for label in RECORD_PRIORITY:
+        candidates = found.get(label)
+        if candidates:
+            primary = candidates[0]
+            break
+
+    return {
+        "keys": keys,
+        "primary": primary,
+        "values": values,
+        "always": any(label in found for label in ("ssn", "mrn", "member", "accession")),
+        "strong": any(label in found for label in ("ssn", "mrn", "member",
+                                                   "accession", "name", "provider")),
+        "identity": bool(keys),
+        "labelled": True,
+    }
+
+
 def identifiers(text: str, allow_names: bool = True) -> dict:
     # Minified code is adversarial for name detection: identifiers are mangled
     # to one or two letters and UI strings are dense. On the first real target
@@ -492,13 +594,29 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     for record in key_records:
         if record not in mrns:
             mrns.append(record)
+
+    # A bare 6-8 digit run beside a named person is a record number. Without a
+    # name in the same record it could be a date, a code or a measurement, and
+    # guessing there costs more precision than the recall is worth.
+    if names and not mrns:
+        for match in BARE_ID.finditer(text):
+            mrns.append(match.group(0))
+
     ssns = [m.group(0) for m in SSN.finditer(text) if ssn_valid(m.group(0))]
     dobs = [m.group(0) for m in DOB.finditer(text)]
+    seen_dates = set(dobs)
+    for pattern in (DATE_US, DATE_MONTH, DATE_COMPACT):
+        for match in pattern.finditer(text):
+            value = match.group(0)
+            if value not in seen_dates:
+                seen_dates.add(value)
+                dobs.append(value)
     phones = [m.group(0) for m in PHONE.finditer(text)]
     emails = [m.group(0) for m in EMAIL.finditer(text)
               if not m.group(0).lower().endswith((".example", ".test", "example.com", "example.org"))]
     ips = [m.group(0) for m in IPV4.finditer(text)
            if not m.group(0).startswith(PRIVATE_IP) and not m.group(0).startswith(TEST_IP)]
+    zips = [m.group(1) for m in ZIP_CODE.finditer(text)]
 
     keys: list[str] = []
     if names:
@@ -515,9 +633,11 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         keys.append("email")
     if ips:
         keys.append("ip")
+    if zips:
+        keys.append("geo")
 
     primary = ""
-    for pool in (ssns, mrns, names, dobs, phones, emails, ips):
+    for pool in (ssns, mrns, names, dobs, phones, emails, zips, ips):
         if pool:
             primary = pool[0]
             break
@@ -527,11 +647,30 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         "primary": primary,
         # Every identifier found in the record, so a downstream check can ask
         # "was this value seen here?" without the finding storing any of them.
-        "values": [v for pool in (ssns, mrns, names, dobs, phones, emails, ips) for v in pool],
+        "values": [v for pool in (ssns, mrns, names, dobs, phones, emails, zips, ips)
+                   for v in pool],
         "always": bool(ssns or mrns),
         "strong": bool(names or mrns or ssns),
-        "identity": bool(names or mrns or ssns or dobs or phones),
+        "identity": bool(names or mrns or ssns or dobs or phones or zips),
     }
+
+
+JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
+PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+def decode_jwt(text: str) -> str | None:
+    """A JWT carries its claims in the middle segment, in plain base64."""
+    stripped = text.strip()
+    if not JWT.match(stripped):
+        return None
+    payload = stripped.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    return decoded if decoded.strip() else None
 
 
 def decode_blob(text: str) -> str | None:
@@ -680,12 +819,15 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
         return None
     # A long base64-looking string is worth decoding whatever carrier it sits
     # in: an attribute, a comment and a script tag are all the same hiding place.
+    # A JWT is base64 with dots, so the plain base64 check never fires on it.
+    claims = decode_jwt(text)
+    if claims is not None:
+        return claims, digest(text)
     decoded = decode_blob(text)
     if decoded is not None:
         return decoded, digest(text)
-    if row["carrier"] in ("url", "page_link", "third_party"):
-        # "Rafael%20Ibarra" is a name. Evidence stays on the whole URL, so the
-        # byte range is still exact.
+    if row["carrier"] in ("url", "page_link", "third_party") or PERCENT.search(text):
+        # "Rafael%20Ibarra" and "Lan%20Nguyen" are names, in a URL or a log.
         return urllib.parse.unquote(text), digest(text)
     return text, None
 
@@ -728,7 +870,9 @@ def detect(index_path: Path, vault_root: Path,
             # skipping all .js cost two planted leaks in our own fixture, so the
             # rule stays narrow.
             allow_names = not row["extraction"].startswith("minified")
-            ids = identifiers(unit, allow_names=allow_names)
+            labelled = row["extraction"] == "labelled_record"
+            ids = (identifiers_from_record(unit) if labelled
+                   else identifiers(unit, allow_names=allow_names))
 
             # A long number in a filename is a record number until proven
             # otherwise: "D41_YOUNG_M_7730019.txt" is a patient identifier that
@@ -755,7 +899,11 @@ def detect(index_path: Path, vault_root: Path,
                 context_health = True
 
             take = False
-            if ids["always"]:
+            if labelled and ids["identity"]:
+                # A field that is labelled is evidence on its own. Requiring a
+                # diagnosis beside it is why nine in ten exam items were missed.
+                take = True
+            elif ids["always"]:
                 take = True
             elif row["carrier"] in HIGH_CARRIERS and ids["identity"]:
                 take = True
@@ -799,8 +947,10 @@ def detect(index_path: Path, vault_root: Path,
                 "evidence_grade": row["grade"],
                 "identifiers": ids["keys"],
                 "sensitive": tags,
-                "level": "review" if filename_id else decide(
-                    row["carrier"], ids, has_health, aud, context_health),
+                "level": ("review" if (filename_id or (labelled and not has_health
+                                                       and not ids["always"]))
+                          else decide(row["carrier"], ids, has_health, aud,
+                                      context_health)),
                 "rules": rules_for(row["carrier"], tags),
                 "value_mask": mask(ids["primary"]),
                 "value_hash": digest(ids["primary"]),

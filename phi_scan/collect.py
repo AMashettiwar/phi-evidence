@@ -24,6 +24,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import structured
 from .vault import Vault
 
 TAG = re.compile(r"<[^>]*>", re.S)
@@ -211,6 +212,20 @@ def _collect_json(path: str, text: str, doc: str, sink: Sink) -> None:
 
 
 def _collect_text(path: str, text: str, doc: str, sink: Sink) -> None:
+    # Structured clinical formats are read as fields first. The label is the
+    # evidence, so nothing downstream has to guess what a bare number is.
+    records = structured.records_for(path, text)
+    if records:
+        carrier = ("unlinked_file" if "/exports/" in f"/{path}"
+                   else "downloadable_file")
+        for pairs in records:
+            body = structured.render(pairs)
+            if not body:
+                continue
+            derived = sink.vault.put(body.encode("utf-8"))
+            sink.add(path, derived, 0, len(body), carrier, "labelled_record",
+                     "labelled_record")
+        return
     if path.endswith(".log"):
         offset = 0
         for line in text.splitlines(keepends=True):
@@ -328,6 +343,16 @@ def _collect_dicom(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vaul
     if not tags:
         sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
         return
+
+    # The tag number is the label. Flattening the header to text loses it.
+    records = structured.dicom_records(tags)
+    if records and records[0]:
+        body = structured.render(records[0])
+        if body:
+            derived = vault.put(body.encode("utf-8"))
+            sink.add(path, derived, 0, len(body), "dicom_header",
+                     "labelled_record", "labelled_record")
+            return
 
     lines = [f"{tag}: {value}" for tag, value in tags]
     text = "\n".join(lines)
