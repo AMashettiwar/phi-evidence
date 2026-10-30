@@ -1,8 +1,10 @@
-"""Upload an exam zip, get the results. No tuning, no contamination.
+"""Upload documents, get findings. No scoring, no key upload, no tuning.
 
 The scanner runs on what you upload. Nothing is written outside a temporary
 directory that is deleted when the run finishes, and every value shown is masked.
-Optionally upload the answer key and it scores itself.
+
+This app deliberately has no answer-key input. Scoring happens outside it, so
+that nobody can tune the detector against a scored result.
 """
 
 from __future__ import annotations
@@ -15,47 +17,41 @@ from pathlib import Path
 
 import streamlit as st
 
-from exam_core import extract, score
+from exam_io import extract
 from phi_scan.collect import collect
 from phi_scan.detect import detect
 
-st.set_page_config(page_title="phi-scan exam runner", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="phi-scan", page_icon="🩺", layout="wide")
 
-st.title("phi-scan — exam runner")
+st.title("phi-scan")
 st.caption(
-    "Upload a zip of documents. The scanner reads them, reports what it finds with "
-    "every value masked, and — if you include the answer key — scores itself. "
-    "Nothing is written outside a temporary folder that is deleted at the end of the run."
+    "Upload a zip of documents. The scanner reads them and reports what it finds, "
+    "with every value masked. Nothing is written outside a temporary folder that is "
+    "deleted when the run ends."
 )
 
 left, right = st.columns([3, 2])
 with left:
-    exam_zip = st.file_uploader("Exam zip", type=["zip"])
+    exam_zip = st.file_uploader("Documents (.zip)", type=["zip"])
 with right:
-    key_file = st.file_uploader("Answer key (optional, .json)", type=["json"])
-
-profile = st.radio(
-    "Profile", ["extended", "safe_harbor"], horizontal=True,
-    help="extended reports an identifier even with no diagnosis beside it; "
-         "safe_harbor requires health context, matching the narrower HIPAA reading.",
-)
+    context = st.radio(
+        "Context", ["covered-entity", "public-web"], horizontal=True,
+        help="covered-entity: an identifier is reportable on its own. "
+             "public-web: identity plus a health fact.",
+    )
 
 if st.button("Scan", type="primary", disabled=exam_zip is None):
-    with st.spinner("reading documents and deciding findings ..."):
-        with tempfile.TemporaryDirectory(prefix="phi-exam-") as tmp:
-            root = Path(tmp)
-            source = root / "src"
-            source.mkdir()
-            with zipfile.ZipFile(exam_zip) as archive:
-                files = extract(archive, source)
+    with tempfile.TemporaryDirectory(prefix="phi-scan-") as tmp:
+        root = Path(tmp)
+        source = root / "src"
+        source.mkdir()
+        with zipfile.ZipFile(exam_zip) as archive:
+            files = extract(archive, source)
 
-            out = root / "out"
-            manifest = collect(source, out)
-            findings = detect(out / "index.jsonl", out / "vault",
-                              extended=(profile == "extended"))
-            key = json.loads(key_file.read().decode("utf-8")) if key_file else None
-
-        result = score(key, findings) if key else None
+        out = root / "out"
+        manifest = collect(source, out)
+        findings = detect(out / "index.jsonl", out / "vault",
+                          context=context)
 
     levels = Counter(f["level"] for f in findings)
     carriers = Counter(f["carrier"] for f in findings)
@@ -88,26 +84,6 @@ if st.button("Scan", type="primary", disabled=exam_zip is None):
         ]))
     st.download_button("Download findings (CSV)", "\n".join(csv_lines),
                        file_name="findings.csv", mime="text/csv")
-
-    if result is not None:
-        st.subheader("Score")
-        a, b, c, d = st.columns(4)
-        a.metric("recall", f"{result['recall']:.1%}",
-                 f"{result['matched']}/{result['total']}")
-        b.metric("precision", f"{result['precision']:.1%}")
-        c.metric("traps reported", result["traps"])
-        d.metric("excluded reported", result["excluded"])
-        if result["by_cat"]:
-            st.write("**missed, by category**")
-            st.dataframe([{"category": k, "missed": v}
-                          for k, v in result["by_cat"].most_common(20)],
-                         use_container_width=True, height=260)
-        st.download_button(
-            "Download per-item result (CSV)",
-            "doc,category,tier,kind,found\n" + "\n".join(
-                f"{r['doc']},{json.dumps(str(r['category']))},{r['tier']},"
-                f"{r['kind']},{r['found']}" for r in result["rows"]),
-            file_name="per_item.csv", mime="text/csv")
 
 st.divider()
 st.caption(

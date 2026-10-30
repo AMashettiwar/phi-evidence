@@ -1,0 +1,44 @@
+name: gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: build fixtures
+        run: |
+          python fixtures/build_world.py
+          python fixtures/build_evasion.py
+          python fixtures/build_context.py
+      - name: policy
+        run: python tools/lint_policy.py
+      - name: world
+        run: python tools/check_world.py && python tools/check_detect.py
+      - name: collection
+        run: python tools/check_collect.py
+      - name: evasion
+        run: python tools/check_evasion.py
+      - name: context
+        run: python tools/check_context.py
+      - name: positional output and redaction round-trip
+        run: python tools/check_emit.py
+      - name: no exam content
+        env:
+          EXAM_KEY: ${{ secrets.EXAM_KEY_PATH }}
+        run: |
+          if [ -n "$EXAM_KEY" ]; then
+            python tools/check_no_exam_content.py --key "$EXAM_KEY"
+          else
+            python tools/check_no_exam_content.py
+          fi

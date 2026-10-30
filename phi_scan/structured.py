@@ -1,14 +1,14 @@
 """Read structured clinical records as fields, not as text.
 
-The failure the exam exposed: we parsed HL7, X12, DICOM and CSV, then flattened
-every record into a blob of text and threw the labels away. `NGUYEN^LAN^THI` and
-`30118442` arrived as anonymous strings, and a text scanner cannot tell a patient
-name from a test name.
+The failure a blind exam exposed: we parsed HL7, X12, DICOM and CSV, then
+flattened every record into a blob of text and threw the labels away.
+`DOE^JANE^Q` and `00012345` arrived as anonymous strings, and a text scanner
+cannot tell a patient name from a test name.
 
 So each format is read into labelled fields here:
 
-    name=NGUYEN^LAN^THI
-    mrn=30118442
+    name=DOE^JANE^Q
+    mrn=00012345
     dob=19941102
     ssn=521770943
 

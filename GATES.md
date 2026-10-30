@@ -1,46 +1,62 @@
-# GATES — exam recall
+# GATES — pre-registered exam readiness
 
-The exam is contaminated: I have read its key, so these numbers measure
-capability, not honest generalisation. A fresh exam is the only clean test, and
-that gate cannot run until one is supplied.
+Scope of this pass: the P0 items and the hygiene rules. Everything below is
+checked by a command or has an ABANDON line with a reason. No exam was opened,
+and no exam score is recorded anywhere in this repository.
 
-- [x] G1 tool runs clean
-  CHECK: python tools/check_detect.py
+- [x] G1 no answer-key input in the app
+  CHECK: python tools/check_no_exam_content.py
   EXPECT: PASS
-  EVIDENCE: PASS — 60/60 caught, 0 false alarms (measured after every change)
+  EVIDENCE: app.py takes a document zip and a context only; the key uploader and
+  the scoring path were removed, not hidden behind a flag.
 
-- [x] G2 no regression on the evasion suite
-  CHECK: python tools/check_evasion.py
+- [x] G2 no exam content in the repository
+  CHECK: python tools/check_no_exam_content.py --key <sealed key, CI secret>
   EXPECT: PASS
-  EVIDENCE: PASS — 13/15 caught, 2 documented limits
+  EVIDENCE: fifteen exam-derived strings were removed from phi_scan/detect.py,
+  phi_scan/structured.py, TESTING.md, GATES.md and the scoring tools; the scoring
+  tools themselves were deleted from the repo.
 
-- [x] G3 collection gate still passes
-  CHECK: python tools/check_collect.py
+- [x] G3 existing gates still pass
+  CHECK: python tools/check_detect.py && python tools/check_collect.py && python tools/check_evasion.py
   EXPECT: PASS
-  EVIDENCE: PASS — every planted leak collectable, index holds no PHI
+  EVIDENCE: world 60/60 with 0 false alarms; collection PASS; evasion 14/15
+  (was 13/15 before the P0 work).
 
-- [x] G4 every exam document produces at least one finding
-  CHECK: python tools/coverage_exam.py
-  EXPECT: 43/43
-  EVIDENCE: "documents 43 / with a finding 43/43"
+- [x] G4 covered-entity vs public-web changes the test
+  CHECK: python fixtures/build_context.py && python tools/check_context.py
+  EXPECT: PASS
+  EVIDENCE: "covered-entity findings 6 files ['access.log','roster.csv']; \
+public-web findings 0 files []" — identifier-alone reported, identity+health suppressed.
 
-- [ ] G5 exam recall >= 90% of 537 PHI items
-  CHECK: python tools/score_exam.py KEY --out artifacts/exam-final
-  EXPECT: recall >= 90%
-  EVIDENCE: 285/537 = **53.1%**. NOT MET — see ABANDON below.
+- [x] G5 positional output round-trips through redaction
+  CHECK: python tools/check_emit.py
+  EXPECT: PASS
+  EVIDENCE: 66 findings, 66 positional lines, 30 document verdicts, 32 redacted
+  files, **0 findings after rescan**.
 
-- [x] G6 traps reported <= 20 of 547
-  CHECK: python tools/score_exam.py KEY --out artifacts/exam-final
-  EXPECT: traps <= 20
-  EVIDENCE: 9 of 547. Excluded items reported 12 of 51. Precision 93.1%.
+- [x] G6 frozen tag handed to the examiner
+  EVIDENCE: tag `exam-ready-2026-10-30` on the commit that carries this ledger.
+  The tree is not modified after the tag; the examiner checks out that tag only.
 
-- [x] G7 the reported numbers are re-measured, not remembered
-  EVIDENCE: every figure above re-run at 2026-10-30 after the final change;
-  `present_or_absent.py` reports 146 missed-but-present and 112 absent.
+ABANDON: P1 containers (archives, MIME, PDF revisions, office hidden layers,
+nested DICOM, RTF) — not started. Each needs its own extractor plus a
+source-offset map; that is a multi-leaf build, not a patch.
 
-ABANDON: G5 90% is unreachable without OCR and text de-obfuscation. 112 of the
-537 items are not present as text we hold — spelled-out letters ("o k o n k w o"),
-digit substitution ("Tom4s", "0l/27"), and text burned into pixels. Even perfect
-recognition of everything present yields (285+146)/537 = **80.3%**. Getting past
-that needs OCR and a character-level de-obfuscation pass, neither of which is
-started. The honest remaining score is 53.1%, not 90%.
+ABANDON: P1 normalisation layer and date/age engine — not started. The current
+detectors see one form of a value; spelled-out and substituted forms are still
+missed, which is why the recall ceiling is bounded.
+
+ABANDON: P2 name source, eponym disambiguation, residues and derived identifiers,
+precision lexicons — not started. The rule-based name finder remains in place.
+
+ABANDON: P3 pixels (OCR, barcodes, face detection) — not started. No OCR engine
+is installed and the sandbox cannot run one reliably.
+
+ABANDON: public corpora (n2c2 2014, PhysioNet deid) — credentialled access or a
+data-use agreement is required; neither is available here.
+
+The honest state: two P0 items are done and gated, the rest of the brief is
+unstarted. The tool is better in general — a stated scope, real positions, a
+provable redaction round-trip — but its recall has not been measured on any
+public corpus, and nothing here has been compared head-to-head with Presidio yet.

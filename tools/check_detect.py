@@ -34,7 +34,7 @@ AUTH_PREFIXES = ("portal",)
 
 def main() -> int:
     manifest = collect(WORLD, OUT, str(ROOT / "pylibs"))
-    findings = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES)
+    findings = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web")
     vault = Vault(OUT / "vault")
     cache: dict[str, bytes] = {}
 
@@ -178,7 +178,7 @@ def main() -> int:
         print(f"  patient values present: {leaked[:5]}")
 
     # --- same input, same findings -----------------------------------------
-    again = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES)
+    again = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web")
     stable = json.dumps(again, sort_keys=True) == rendered
     print(f"detection deterministic    {stable}")
 

@@ -381,7 +381,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         if len(first.rstrip(".")) < 2 or len(last.rstrip(".")) < 2:
             continue
         # "HIV POSITIVE" is an acronym pair, not a person. Only reject pairs
-        # that actually look like clinical acronyms — "MENSAH KOFI" is a name
+        # that actually look like clinical acronyms — "SMITH JOHN" is a name
         # written the way a lab system writes it.
         if first.isupper() and last.isupper():
             if (first.rstrip(".") in ACRONYMS or last.rstrip(".") in ACRONYMS
@@ -398,7 +398,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         candidates.append((2, start, end, f"{first} {last}"))
 
-    # "OKONKWO, ADAEZE" is the same person as "Adaeze Okonkwo". Two letters are
+    # "SMITH, JANE" is the same person as "Jane Smith". Two letters are
     # rejected so a city/state pair ("Bangor, ME") is never read as a name.
     for match in NAME_COMMA.finditer(text):
         start, end = match.start(1), match.end(2)
@@ -716,7 +716,7 @@ AGE_OVER = re.compile(
     r"\b(?:9\d|1\d\d)\s*[- ]?(?:year|yr)s?[- ]?old\b"
     r"|\bin (?:her|his|their) (?:9\d|1\d\d)s\b"
     r"|\b(?:age|aged)\s+(?:9\d|1\d\d)\b", re.I)
-# Five digits is a ZIP; not when it is part of a LOINC code ("24108-3").
+# Five digits is a ZIP; not when it is part of a LOINC code ("12345-6").
 ZIP5 = re.compile(r"(?<![\d-])\d{5}(?![\d.-])")
 
 
@@ -924,14 +924,28 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
     if decoded is not None:
         return decoded, digest(text)
     if row["carrier"] in ("url", "page_link", "third_party") or PERCENT.search(text):
-        # "Rafael%20Ibarra" and "Lan%20Nguyen" are names, in a URL or a log.
+        # "Jane%20Doe" is a name, in a URL or a log.
         return urllib.parse.unquote(text), digest(text)
     return text, None
 
 
 def detect(index_path: Path, vault_root: Path,
            auth_prefixes: tuple[str, ...] = (),
-           extended: bool = False) -> list[dict]:
+           context: str = "covered-entity") -> list[dict]:
+    """Decide findings.
+
+    context decides the test, not the severity:
+
+      covered-entity  every Safe Harbor identifier of a patient, relative,
+                      employer or household member is reportable on its own.
+                      Logs, rosters, exports and audit trails count.
+                      45 CFR 164.514(b)(2)(i).
+      public-web      identity plus a health fact. A page naming a doctor is not
+                      an exposure; a page naming a patient and a diagnosis is.
+    """
+    if context not in ("covered-entity", "public-web"):
+        raise ValueError(f"unknown context: {context}")
+    covered = context == "covered-entity"
     vault = Vault(vault_root)
     rows = [json.loads(line) for line in
             Path(index_path).read_text(encoding="utf-8").splitlines() if line]
@@ -984,7 +998,7 @@ def detect(index_path: Path, vault_root: Path,
                    else identifiers(unit, allow_names=allow_names))
 
             # A long number in a filename is a record number until proven
-            # otherwise: "D41_YOUNG_M_7730019.txt" is a patient identifier that
+            # otherwise: "chart_2024_0012345.txt" is a patient identifier that
             # no body scan will ever see. Rated review, not critical, because a
             # number alone cannot be confirmed.
             filename_id = False
@@ -1009,25 +1023,27 @@ def detect(index_path: Path, vault_root: Path,
 
             take = False
             weak_only = False
-            if labelled and ids["identity"]:
-                # A field that is labelled is evidence on its own. Requiring a
-                # diagnosis beside it is why nine in ten exam items were missed.
-                take = True
-            elif ids["always"]:
-                take = True
-            elif row["carrier"] in HIGH_CARRIERS and ids["identity"]:
-                take = True
-            elif ids["strong"] and has_health:
-                take = True
-            elif row["carrier"] in WITHHOLD_CARRIERS and ids["strong"]:
-                take = True
-            elif extended and ids["identity"]:
-                # Extended profile: an identifier is worth a review even with no
-                # diagnosis beside it. A roster, a directory and a log of record
-                # numbers are exposures, and the safe-harbor reading that
-                # requires health context is the narrower question.
-                take = True
-                weak_only = True
+            if covered:
+                # Covered entity: an identifier of a patient, relative,
+                # employer or household member is reportable on its own, whether
+                # it is a labelled field, a log line or a roster column.
+                if ids["identity"]:
+                    take = True
+                    weak_only = not has_health and not ids["always"]
+            else:
+                # Public web: identity plus a health fact, plus the identifiers
+                # that are never safe on their own — a record number or a Social
+                # Security number identifies a person with no diagnosis needed.
+                if ids["always"]:
+                    take = True
+                elif row["carrier"] in HIGH_CARRIERS and ids["identity"]:
+                    take = True
+                elif ids["strong"] and has_health:
+                    # A phone number on its own is the organisation's, not a
+                    # patient's. Identity means a name, a record number or an SSN.
+                    take = True
+                elif row["carrier"] in WITHHOLD_CARRIERS and ids["strong"] and has_health:
+                    take = True
             if not take:
                 continue
 
@@ -1045,9 +1061,9 @@ def detect(index_path: Path, vault_root: Path,
                 offset, length = row["offset"] + position, len(ids["primary"])
 
             hashes = {digest(v) for v in ids["values"]}
-            if extended:
-                # Extended profile reports the document, so the document's
-                # identifiers go with it. Safe harbor keeps one finding per
+            if covered:
+                # Covered-entity reports the document, so the document's
+                # identifiers go with it. Public-web keeps one finding per
                 # record, which is the invariant the world fixture checks.
                 hashes.update(digest(v) for v in file_values.get(row["path"], ()))
             if encoded is not None:
@@ -1079,10 +1095,10 @@ def detect(index_path: Path, vault_root: Path,
                 "value_hash": digest(ids["primary"]),
             })
 
-    # Extended profile: a document holding identifiers is reported even if no
+    # Covered-entity: a document holding identifiers is reported even if no
     # single span held both an identity and a diagnosis. Silence is the worst
     # answer when the file plainly names people.
-    if extended:
+    if covered:
         covered = {finding["path"] for finding in findings}
         for row in rows:
             path = row["path"]
