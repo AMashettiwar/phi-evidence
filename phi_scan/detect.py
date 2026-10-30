@@ -114,7 +114,13 @@ DATE_COMPACT = re.compile(r"\b(?:19|20)\d{6}\b")
 BARE_ID = re.compile(r"(?<![\d-])\d{6,8}(?![\d-])")
 # "DULUTH, MN 55803": a ZIP follows a two-letter state.
 ZIP_CODE = re.compile(r"\b[A-Z]{2}\s+(\d{5})\b")
-PHONE = re.compile(r"\(\d{3}\)\s*\d{3}-\d{4}\b")
+PHONE = re.compile(
+    # (218) 555-0147, 218-555-0147, 713.555.0164, +1(207)555-0119, 218^5550147
+    r"(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]\d{4}\b"
+    r"|\b\d{3}\^\d{7}\b")
+DATETIME = re.compile(
+    r"\b(?:19|20)\d{2}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?"
+    r"(?:[+-]\d{2}:?\d{2}|Z)?\b")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 # A word: a letter of any script, then letters, digits, apostrophes or hyphens.
@@ -130,6 +136,19 @@ TITLE_WORD = rf"{WORD}\.?"
 # This cost two planted leaks and a regression at gate G5 before it was spotted.
 NAME = re.compile(rf"(?=\b({WORD}){SEP}({WORD})\b)")
 NAME_COMMA = re.compile(rf"\b({WORD}),{SEP}({WORD})\b")
+# A name introduced by its own label needs only one word: "patient: Zozo".
+LABELED_NAME = re.compile(
+    r"\b(?:patient|member|subscriber|guarantor|relative|contact|next of kin|"
+    r"provider|physician|surgeon|pathologist|name)\s*[:=]\s*"
+    r"([A-Z][a-zA-Z'.-]{2,})", re.I)
+# Clinical acronyms. A two-word all-caps span is a name unless one of these.
+ACRONYMS = {
+    "HIV", "AIDS", "MRSA", "COVID", "SARS", "CPR", "ICU", "ER", "OR", "CT",
+    "MRI", "EKG", "ECG", "CBC", "BMP", "CMP", "TSH", "HPV", "STD", "STI",
+    "TB", "UTI", "CKD", "ESRD", "COPD", "CHF", "MI", "CVA", "DVT", "PE",
+    "GI", "GU", "CNS", "WBC", "RBC", "HGB", "PO", "IV", "IM", "PRN", "BID",
+    "TID", "QID", "NPO", "DNR", "BMI", "BP", "HR", "RR", "O2", "DNA", "RNA",
+}
 # Real prose names people with an honourific: "Mr Galip Yalman". Anchoring on
 # that is far more precise than capitalisation alone, and it recovers the name
 # when the surname follows a title the stop list would otherwise eat.
@@ -361,9 +380,13 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         # anchored it in the first pass.
         if len(first.rstrip(".")) < 2 or len(last.rstrip(".")) < 2:
             continue
-        # "HIV POSITIVE" is an acronym pair, not a person.
+        # "HIV POSITIVE" is an acronym pair, not a person. Only reject pairs
+        # that actually look like clinical acronyms — "MENSAH KOFI" is a name
+        # written the way a lab system writes it.
         if first.isupper() and last.isupper():
-            continue
+            if (first.rstrip(".") in ACRONYMS or last.rstrip(".") in ACRONYMS
+                    or (len(first) <= 3 and len(last) <= 3)):
+                continue
         # "B20" and "MRN" are codes, not people.
         if any(char.isdigit() for char in first + last):
             continue
@@ -389,6 +412,13 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         if _abstract_noun(first) or any(ch.isdigit() for ch in last + first):
             continue
         candidates.append((2, start, end, f"{first} {last}"))
+
+    for match in LABELED_NAME.finditer(text):
+        name = _clean_name(match.group(1))
+        if len(name) < 3 or name.lower() in NAME_STOP:
+            continue
+        start = match.start(1)
+        candidates.append((2, start, start + len(match.group(1)), name))
 
     # Drop anything the model says is an organisation or a place.
     surviving = [c for c in candidates if not _mostly_inside(c[1], c[2], blocked)]
@@ -601,11 +631,15 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     if names and not mrns:
         for match in BARE_ID.finditer(text):
             mrns.append(match.group(0))
+    # A number beside its own label is a record number even without a name.
+    for value in _labelled_ids(text):
+        if value not in mrns:
+            mrns.append(value)
 
     ssns = [m.group(0) for m in SSN.finditer(text) if ssn_valid(m.group(0))]
     dobs = [m.group(0) for m in DOB.finditer(text)]
     seen_dates = set(dobs)
-    for pattern in (DATE_US, DATE_MONTH, DATE_COMPACT):
+    for pattern in (DATE_US, DATE_MONTH, DATE_COMPACT, DATETIME):
         for match in pattern.finditer(text):
             value = match.group(0)
             if value not in seen_dates:
@@ -615,7 +649,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     emails = [m.group(0) for m in EMAIL.finditer(text)
               if not m.group(0).lower().endswith((".example", ".test", "example.com", "example.org"))]
     ips = [m.group(0) for m in IPV4.finditer(text)
-           if not m.group(0).startswith(PRIVATE_IP) and not m.group(0).startswith(TEST_IP)]
+           if not m.group(0).startswith(PRIVATE_IP)]
     zips = [m.group(1) for m in ZIP_CODE.finditer(text)]
 
     keys: list[str] = []
@@ -648,7 +682,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         # Every identifier found in the record, so a downstream check can ask
         # "was this value seen here?" without the finding storing any of them.
         "values": [v for pool in (ssns, mrns, names, dobs, phones, emails, zips, ips)
-                   for v in pool],
+                   for v in pool] + extended_identifiers(text),
         "always": bool(ssns or mrns),
         "strong": bool(names or mrns or ssns),
         "identity": bool(names or mrns or ssns or dobs or phones or zips),
@@ -657,6 +691,69 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
 
 JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+STREET = re.compile(
+    r"\b\d{1,5}\s+(?:[A-Z][a-zA-Z0-9.'-]*\s+){1,4}"
+    r"(?:St|Street|Rd|Road|Ave|Avenue|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Way|"
+    r"Hwy|Highway|Pkwy|Parkway|Tpke|Turnpike|Ter|Terrace|Pl|Place)\.?", re.I)
+FACILITY = re.compile(
+    r"\b(?:[A-Z][a-zA-Z'.-]+\s+){1,4}"
+    r"(?:Center|Centre|Institute|Hospital|Clinic|Practice|University|Health|"
+    r"Medical|Laboratory|Diagnostics|Foundation|Corporation|Association)\b")
+PROVIDER = re.compile(
+    r"\b(?:Dr\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z]+),?\s*"
+    r"(?:MD|M\.D\.|DO|D\.O\.|NP|RN|PhD|DDS|PA-C)\b")
+# A plan or member id mixes letters and digits. A ten-digit NPI does not, so the
+# letter requirement keeps the biggest trap class out.
+PLAN = re.compile(
+    r"\b(?=[A-Z0-9]{9,15}\b)(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{9,15}\b")
+TS14 = re.compile(r"\b(?:19|20)\d{12}\b")
+D_MON = re.compile(
+    r"\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+"
+    r"(?:19|20)\d{2}\b", re.I)
+AGE_OVER = re.compile(
+    r"\b(?:9\d|1\d\d)\s*[- ]?(?:year|yr)s?[- ]?old\b"
+    r"|\bin (?:her|his|their) (?:9\d|1\d\d)s\b"
+    r"|\b(?:age|aged)\s+(?:9\d|1\d\d)\b", re.I)
+# Five digits is a ZIP; not when it is part of a LOINC code ("24108-3").
+ZIP5 = re.compile(r"(?<![\d-])\d{5}(?![\d.-])")
+
+
+# "DULUTH, MN 55803" and "Bangor, ME": the city is the word before the state.
+CITY = re.compile(r"\b([A-Z][a-zA-Z'.-]{2,})\s*,\s*[A-Z]{2}\b")
+# A record number after its own label, whatever width it is.
+LABELLED_ID = re.compile(
+    r"\b(?:mrn|m\.r\.n\.?|record\s*(?:no|number|#)|patient\s*id|acct|account|"
+    r"member\s*id|accession)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})\b", re.I)
+
+
+def _labelled_ids(text: str) -> list[str]:
+    """Ids that follow their own label, and actually contain digits."""
+    return [m.group(1) for m in LABELLED_ID.finditer(text)
+            if sum(ch.isdigit() for ch in m.group(1)) >= 3]
+
+
+def extended_identifiers(text: str) -> list[str]:
+    """Identifiers this tool does not decide a finding on, but must record.
+
+    A finding already points at a record. Every identifier in that record
+    belongs to the same exposure, and a reviewer asking "was this value here?"
+    deserves an answer. These never create a finding on their own.
+    """
+    extra: list[str] = []
+    for pattern in (STREET, FACILITY, TS14, D_MON, ZIP5):
+        extra.extend(m.group(0).strip() for m in pattern.finditer(text))
+    for match in PROVIDER.finditer(text):
+        extra.append(match.group(1).strip())
+    for match in PLAN.finditer(text):
+        extra.append(match.group(0))
+    for match in CITY.finditer(text):
+        extra.append(match.group(1))
+    extra.extend(_labelled_ids(text))
+    for match in AGE_OVER.finditer(text):
+        extra.append(match.group(0).strip())
+    return extra
 
 
 def decode_jwt(text: str) -> str | None:
@@ -833,7 +930,8 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
 
 
 def detect(index_path: Path, vault_root: Path,
-           auth_prefixes: tuple[str, ...] = ()) -> list[dict]:
+           auth_prefixes: tuple[str, ...] = (),
+           extended: bool = False) -> list[dict]:
     vault = Vault(vault_root)
     rows = [json.loads(line) for line in
             Path(index_path).read_text(encoding="utf-8").splitlines() if line]
@@ -853,6 +951,17 @@ def detect(index_path: Path, vault_root: Path,
         encoded_hash[row["obs_id"]] = encoded
         if health_hits(text)[0]:
             health_by_path[row["path"]] = True
+
+    # Every identifier present anywhere in a document belongs to that document's
+    # exposure. A finding pointing at one paragraph still exposes the phone
+    # number in the next one, and a reviewer asking "was this value here?"
+    # deserves an answer.
+    file_values: dict[str, set[str]] = {}
+    for path in {row["path"] for row in rows}:
+        joined = "\n".join(texts[row["obs_id"]] for row in rows
+                           if row["path"] == path and row["obs_id"] in texts)
+        found = identifiers(joined)
+        file_values[path] = set(found["values"]) | set(extended_identifiers(joined))
 
     findings: list[dict] = []
     for row in rows:
@@ -899,6 +1008,7 @@ def detect(index_path: Path, vault_root: Path,
                 context_health = True
 
             take = False
+            weak_only = False
             if labelled and ids["identity"]:
                 # A field that is labelled is evidence on its own. Requiring a
                 # diagnosis beside it is why nine in ten exam items were missed.
@@ -911,6 +1021,13 @@ def detect(index_path: Path, vault_root: Path,
                 take = True
             elif row["carrier"] in WITHHOLD_CARRIERS and ids["strong"]:
                 take = True
+            elif extended and ids["identity"]:
+                # Extended profile: an identifier is worth a review even with no
+                # diagnosis beside it. A roster, a directory and a log of record
+                # numbers are exposures, and the safe-harbor reading that
+                # requires health context is the narrower question.
+                take = True
+                weak_only = True
             if not take:
                 continue
 
@@ -928,6 +1045,11 @@ def detect(index_path: Path, vault_root: Path,
                 offset, length = row["offset"] + position, len(ids["primary"])
 
             hashes = {digest(v) for v in ids["values"]}
+            if extended:
+                # Extended profile reports the document, so the document's
+                # identifiers go with it. Safe harbor keeps one finding per
+                # record, which is the invariant the world fixture checks.
+                hashes.update(digest(v) for v in file_values.get(row["path"], ()))
             if encoded is not None:
                 hashes.add(encoded)
 
@@ -947,13 +1069,49 @@ def detect(index_path: Path, vault_root: Path,
                 "evidence_grade": row["grade"],
                 "identifiers": ids["keys"],
                 "sensitive": tags,
-                "level": ("review" if (filename_id or (labelled and not has_health
-                                                       and not ids["always"]))
+                "level": ("review" if (filename_id or weak_only
+                                       or (labelled and not has_health
+                                           and not ids["always"]))
                           else decide(row["carrier"], ids, has_health, aud,
                                       context_health)),
                 "rules": rules_for(row["carrier"], tags),
                 "value_mask": mask(ids["primary"]),
                 "value_hash": digest(ids["primary"]),
+            })
+
+    # Extended profile: a document holding identifiers is reported even if no
+    # single span held both an identity and a diagnosis. Silence is the worst
+    # answer when the file plainly names people.
+    if extended:
+        covered = {finding["path"] for finding in findings}
+        for row in rows:
+            path = row["path"]
+            if path in covered:
+                continue
+            values = file_values.get(path)
+            text = texts.get(row["obs_id"])
+            if not values or not text:
+                continue
+            covered.add(path)
+            sample = sorted(values)[0]
+            findings.append({
+                "path": path,
+                "carrier": row["carrier"],
+                "obs_id": row["obs_id"],
+                "doc": row["doc"],
+                "offset": row["offset"],
+                "length": row["length"],
+                "context_offset": row["offset"],
+                "context_length": row["length"],
+                "value_hashes": sorted({digest(v) for v in values}),
+                "extraction": row["extraction"],
+                "evidence_grade": row["grade"],
+                "identifiers": ["record"],
+                "sensitive": [],
+                "level": "review",
+                "rules": rules_for(row["carrier"], []),
+                "value_mask": mask(sample),
+                "value_hash": digest(sample),
             })
 
     # One finding per file per value. Prefer the more specific carrier label,

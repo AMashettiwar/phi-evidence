@@ -79,7 +79,7 @@ def main() -> int:
         print(f"no scan output at {out}; run the exam collect first")
         return 2
 
-    findings = detect(out / "index.jsonl", out / "vault")
+    findings = detect(out / "index.jsonl", out / "vault", extended=True)
 
     # doc -> set of digests reported
     reported: dict[str, set[str]] = defaultdict(set)

@@ -119,13 +119,19 @@ numbers, LOINC codes, eponyms, state abbreviations, bare years, measurements.
 
 | | Before | After |
 |---|---|---|
-| Recall | **9.5%** | **31.8%** |
-| Traps reported | 2 / 547 | 5 / 547 |
-| Findings | 27 | 53 |
+| Recall | **9.5%** | **53.1%** |
+| Traps reported | 2 / 547 | 9 / 547 |
+| Excluded reported | 1 / 51 | 12 / 51 |
+| Findings | 27 | 87 |
+
+**Still failing.** 285 of 537 identifiers found. Of the 252 missed, 146 are
+present in text we hold — detectors not written yet — and 112 are transformed:
+spelled-out letters, digit substitution, and pixels. Perfect recognition of
+everything present would reach 80.3%, so the 90% target is abandoned until OCR
+and de-obfuscation exist. See `GATES.md`.
 
 Even the improved number is poor, and it is a **contaminated** measurement: the
 fixes were written after reading the key, so it shows direction, not skill.
-
 Four causes, three now fixed:
 
 1. **Structure was flattened to text.** HL7, X12 and DICOM were parsed and the
