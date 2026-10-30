@@ -65,6 +65,40 @@ That bug affected every non-ASCII document since the first version. A tidy
 fixture made of ASCII could never have found it. Fixing it took one map per
 document and moved three evasion cases from fail to pass.
 
+## Field test: a 43-file exam
+
+A blind exam of 43 files in 20 formats, written by someone else.
+
+**First run, unmodified tool:**
+
+| | |
+|---|---|
+| Files read | **22 of 43** |
+| Findings | 14 |
+| Plausibly real | ~7 — about 50% precision |
+| Run to run | **14, 14, 14, and once 13** |
+
+Twenty-one files were never opened. Thirteen were `.txt`: the collector had no
+plain-text branch at all. The exam even included a file named
+`D41_YOUNG_M_7730019.txt` — a patient identifier in the filename — and it was
+missed twice over.
+
+**Defects that exposed, all now fixed:**
+
+| Defect | Fix |
+|---|---|
+| No `.txt`, `.md`, `.patch`, `.eml`, `.jsonl` handling | whole-file fallback |
+| No HL7 or X12 | segment-per-record for both |
+| `.docx` / `.xlsx` read as bytes | unzip and strip the XML |
+| `.png` / `.jpg` read as bytes | printable strings from EXIF/PNG chunks — metadata, not pixels |
+| Identifiers in filenames | path is a carrier; a 6+ digit run is a record number, rated review |
+| "PDF", "Blvd", "MD", "Institute" as people | document-furniture stop list, applied to key-derived names too |
+| Same input, different output | PDF metadata sorted before emitting |
+
+**After:** 43 of 43 files read, 27 findings, world fixture still 60/60.
+
+No OCR. Text burned into pixels is still not read, and the report says so.
+
 ## What is not covered
 
 - **No DOM rendering.** Split text nodes and reversed text need a browser.

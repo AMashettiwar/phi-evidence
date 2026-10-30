@@ -480,7 +480,12 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     # harmful: on a real clinical API it emitted 887 false names and found 1 of
     # 41 real identifiers. Keys only, except where the payload is really code.
     if payload is not None and not embedded_code:
-        names = key_names
+        # Values pulled from a name-like key still have to look like names. The
+        # stop list applied only to the text detector, so a JSON field called
+        # "name" holding "Radiology, MD" was reported as a person.
+        names = [name for name in key_names
+                 if not any(token.strip(".,'-").lower() in NAME_STOP
+                            for token in name.split())]
     else:
         names = find_names(text) if allow_names else []
     mrns = [m.group(0) for m in MRN.finditer(text)]
@@ -724,6 +729,19 @@ def detect(index_path: Path, vault_root: Path,
             # rule stays narrow.
             allow_names = not row["extraction"].startswith("minified")
             ids = identifiers(unit, allow_names=allow_names)
+
+            # A long number in a filename is a record number until proven
+            # otherwise: "D41_YOUNG_M_7730019.txt" is a patient identifier that
+            # no body scan will ever see. Rated review, not critical, because a
+            # number alone cannot be confirmed.
+            filename_id = False
+            if not ids["identity"] and row["carrier"] == "url":
+                guess = re.search(r"\d{6,}", unit)
+                if guess:
+                    filename_id = True
+                    ids = {"keys": ["record_number"], "primary": guess.group(0),
+                           "values": [guess.group(0)], "always": True,
+                           "strong": True, "identity": True}
             if not ids["identity"]:
                 continue
             if suppression_reason(unit):
@@ -781,7 +799,8 @@ def detect(index_path: Path, vault_root: Path,
                 "evidence_grade": row["grade"],
                 "identifiers": ids["keys"],
                 "sensitive": tags,
-                "level": decide(row["carrier"], ids, has_health, aud, context_health),
+                "level": "review" if filename_id else decide(
+                    row["carrier"], ids, has_health, aud, context_health),
                 "rules": rules_for(row["carrier"], tags),
                 "value_mask": mask(ids["primary"]),
                 "value_hash": digest(ids["primary"]),

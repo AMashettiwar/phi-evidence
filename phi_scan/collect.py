@@ -231,13 +231,88 @@ def _collect_text(path: str, text: str, doc: str, sink: Sink) -> None:
                 sink.add(path, doc, offset, len(body), carrier, "csv_row")
             offset += len(line)
     elif path.endswith(".xml"):
+        found = False
         for match in LOC.finditer(text):
             sink.add(path, doc, match.start(1), len(match.group(1)), "sitemap", "loc")
+            found = True
+        if not found:
+            sink.add(path, doc, 0, len(text), "downloadable_file", "whole_file")
+    elif path.endswith((".hl7", ".x12")):
+        # HL7 v2 and X12 are line- or segment-oriented. One segment is one
+        # record, so a PID segment keeps its name and its record number together.
+        offset = 0
+        for line in text.splitlines(keepends=True):
+            body = line.rstrip("\r\n")
+            if body.strip():
+                sink.add(path, doc, offset, len(body), "downloadable_file",
+                         "hl7_segment" if path.endswith(".hl7") else "x12_segment")
+            offset += len(line)
     elif path.endswith(".css"):
         if PRINT.search(text):
             sink.add(path, doc, 0, len(text), "print_css", "print_media_rule")
     elif "/.git/" in f"/{path}" or path.endswith(".git/config"):
         sink.add(path, doc, 0, len(text), "git_exposure", "whole_file")
+    else:
+        # Anything readable is worth reading. The first version had no fallback,
+        # so thirteen plain-text documents in a real exam were never opened.
+        sink.add(path, doc, 0, len(text), "downloadable_file", "whole_file")
+
+
+def _collect_office(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
+    """Extract the text from a .docx or .xlsx, which are zip files of XML.
+
+    A word processor file is a container. Reading it as bytes finds nothing; the
+    words live inside word/document.xml and xl/sharedStrings.xml.
+    """
+    import html as html_module  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+
+    prefixes = ("word/", "xl/") if not path.endswith(".pptx") else ("ppt/",)
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            chunks: list[str] = []
+            for name in sorted(archive.namelist()):
+                if name.startswith(prefixes) and name.endswith(".xml"):
+                    markup = archive.read(name).decode("utf-8", "replace")
+                    plain = re.sub(r"<[^>]+>", " ", markup)
+                    chunks.append(re.sub(r"\s+", " ", html_module.unescape(plain)))
+            merged = "\n".join(chunk for chunk in chunks if chunk.strip())
+    except Exception:  # noqa: BLE001
+        merged = ""
+
+    if not merged.strip():
+        sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
+        return
+    derived = vault.put(merged.encode("utf-8"))
+    sink.add(path, derived, 0, len(merged), "downloadable_file", "office_text", "office_text")
+
+
+def _collect_image(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
+    """Pull the printable strings out of an image, where EXIF and XMP live.
+
+    There is no OCR here, so text burned into the pixels is not read and the
+    report says so. Metadata is different: PNG text chunks and JPEG APP1 blocks
+    routinely carry a patient name, a device and a date.
+    """
+    strings: list[str] = []
+    run = bytearray()
+    for byte in data:
+        if 32 <= byte < 127:
+            run.append(byte)
+        else:
+            if len(run) >= 6 and any(chr(b).isalpha() for b in run):
+                strings.append(run.decode("ascii"))
+            run.clear()
+    if len(run) >= 6 and any(chr(b).isalpha() for b in run):
+        strings.append(run.decode("ascii"))
+
+    merged = "\n".join(strings[:2000])
+    if not merged.strip():
+        sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
+        return
+    derived = vault.put(merged.encode("utf-8"))
+    sink.add(path, derived, 0, len(merged), "file_metadata", "image_strings", "image_strings")
 
 
 def _collect_dicom(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
@@ -314,7 +389,9 @@ def _collect_pdf(path: str, data: bytes, raw_doc: str, sink: Sink,
         derived = vault.put(text.encode("utf-8"))
         sink.add(path, derived, 0, len(text), "downloadable_file", "pdf_text_layer", "pdf_text")
     info = reader.metadata or {}
-    for key, value in info.items():
+    # Sorted, because dictionary order from the PDF reader is not guaranteed and
+    # an unsorted loop made one finding appear and disappear between runs.
+    for key, value in sorted(info.items()):
         if isinstance(value, str) and value.strip():
             derived = vault.put(value.encode("utf-8"))
             sink.add(path, derived, 0, len(value), "file_metadata", f"pdf_info{key}", "pdf_metadata")
@@ -354,7 +431,8 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
         # and a record number somewhere no body scan will ever look. Only paths
         # that look like they carry one are emitted, to keep the index small.
         posix = rel.replace("\\", "/")
-        if re.search(r"[A-Za-z]{3,}[-_][A-Za-z]{3,}|mrn[-_ ]?\d|patient[-_]?id", posix, re.I):
+        if re.search(r"[A-Za-z]{3,}[-_][A-Za-z]{3,}|mrn[-_ ]?\d|patient[-_]?id|\d{6,}",
+                     posix, re.I):
             path_doc = vault.put(posix.encode("utf-8"))
             sink.add(rel, path_doc, 0, len(posix), "url", "file_path", "file_path")
 
@@ -375,6 +453,10 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
             _collect_pdf(rel, data, doc, sink, vault)
         elif suffix == ".dcm":
             _collect_dicom(rel, data, doc, sink, vault)
+        elif suffix in (".docx", ".xlsx", ".pptx"):
+            _collect_office(rel, data, doc, sink, vault)
+        elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff"):
+            _collect_image(rel, data, doc, sink, vault)
         elif text is None:
             sink.add(rel, doc, 0, len(data), "downloadable_file", "binary")
         elif path.name.lower() == "robots.txt":

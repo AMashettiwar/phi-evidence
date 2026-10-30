@@ -150,6 +150,17 @@ NAME_STOP: set[str] = {
     "rejected", "cancelled", "canceled", "accession", "batch", "study",
     "normal", "abnormal", "positive", "negative", "unknown", "other", "none",
     "male", "female", "physician", "surgeon", "pathologist", "technician",
+    # Document furniture. Every one of these was reported as a person by a real
+    # exam: "PDF", "Blvd", ", MD", "Institute".
+    "md", "dds", "dmd", "phd", "rn", "cpa", "esq", "np", "pa",
+    "blvd", "boulevard", "avenue", "ave", "street", "road", "lane", "drive",
+    "suite", "floor", "parkway", "highway", "apt", "unit",
+    "institute", "institution", "foundation", "corporation",
+    "scan", "scanned", "scanner", "imaging", "diagnostics",
+    "pdf", "docx", "xlsx", "pptx", "csv", "json", "jsonl", "xml", "png",
+    "jpg", "jpeg", "gif", "tiff", "dcm", "hl7", "x12",
+    "report", "reports", "page", "pages", "document", "documents",
+    "test", "tests", "result", "results", "value", "values", "unit", "units",
     # legal, institutional and governmental, added after gate G5
     "commission", "court", "courts", "rights", "kingdom", "republic",
     "government", "governments", "council", "parliament", "ministry",
