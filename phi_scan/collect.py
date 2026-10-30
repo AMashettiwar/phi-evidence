@@ -60,11 +60,25 @@ class Sink:
     def __init__(self, vault: Vault) -> None:
         self.vault = vault
         self.rows: list[dict] = []
+        # Extractors work in character offsets; the vault holds bytes. Without a
+        # per-document map, one non-ASCII character shifts every later span: the
+        # zero-width test lost two characters off the end of its diagnosis.
+        self.maps: dict[str, list[int]] = {}
 
     def add(self, path: str, doc: str, start: int, length: int, carrier: str,
             extraction: str, derivation: str = "raw") -> None:
         if length <= 0:
             return
+        table = self.maps.get(doc)
+        if table is not None and len(table) > 1:
+            total = len(table) - 1
+            begin = table[min(start, total)]
+            end = table[min(start + length, total)]
+            # Never let the conversion produce an empty span: an observation
+            # that ends exactly at end-of-file would otherwise replay as nothing.
+            begin = min(begin, total - 1)
+            length = max(1, end - begin)
+            start = begin
         self.rows.append({
             "path": path, "doc": doc, "offset": start, "length": length,
             "carrier": carrier, "extraction": extraction,
@@ -335,6 +349,27 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             text = None
+
+        # The filename is a carrier. "Rafael-Ibarra_MRN-881010.html" puts a name
+        # and a record number somewhere no body scan will ever look. Only paths
+        # that look like they carry one are emitted, to keep the index small.
+        posix = rel.replace("\\", "/")
+        if re.search(r"[A-Za-z]{3,}[-_][A-Za-z]{3,}|mrn[-_ ]?\d|patient[-_]?id", posix, re.I):
+            path_doc = vault.put(posix.encode("utf-8"))
+            sink.add(rel, path_doc, 0, len(posix), "url", "file_path", "file_path")
+
+        if text is not None:
+            table = [0]
+            for character in text:
+                table.append(table[-1] + len(character.encode("utf-8")))
+            sink.maps[doc] = table
+
+        if suffix in (".html", ".htm"):
+            # CSS can print a patient's name without it ever appearing in the
+            # document's text, because the browser generates it.
+            for block in re.finditer(r"(?is)<style\b[^>]*>(.*?)</style>", text):
+                sink.add(rel, doc, block.start(1), len(block.group(1)),
+                         "css_hidden", "style_block")
 
         if suffix == ".pdf":
             _collect_pdf(rel, data, doc, sink, vault)

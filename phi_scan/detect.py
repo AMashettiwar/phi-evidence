@@ -25,6 +25,7 @@ import base64
 import hashlib
 import json
 import re
+import urllib.parse
 from pathlib import Path
 
 from .lexicon import NAME_STOP, health_hits, suppression_reason
@@ -94,8 +95,12 @@ def _mostly_inside(start: int, end: int, ranges: list[tuple[int, int]],
     return False
 from .vault import Vault
 
-MRN = re.compile(r"\bMRN[- ]?\d{4,}\b", re.I)
-SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+# A separator between name parts, allowing zero-width characters and
+# non-breaking spaces: "Emeka\u200b Delgado" is still one person and a plain
+# \s+ misses it entirely.
+SEP = r"[\s\u200b\u200c\u200d\u2060\ufeff]+"
+MRN = re.compile(r"(?<![A-Za-z0-9])MRN[-\s]?\d{3}[\s-]?\d{3,}\b", re.I)
+SSN = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
 DOB = re.compile(r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b")
 PHONE = re.compile(r"\(\d{3}\)\s*\d{3}-\d{4}\b")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
@@ -111,13 +116,13 @@ TITLE_WORD = rf"{WORD}\.?"
 # the second word of a rejected pair: in "for Emeka Delgado", ("for","Emeka")
 # fails the stop list and takes "Emeka" with it, so the real name is never seen.
 # This cost two planted leaks and a regression at gate G5 before it was spotted.
-NAME = re.compile(rf"(?=\b({WORD})\s+({WORD})\b)")
+NAME = re.compile(rf"(?=\b({WORD}){SEP}({WORD})\b)")
 # Real prose names people with an honourific: "Mr Galip Yalman". Anchoring on
 # that is far more precise than capitalisation alone, and it recovers the name
 # when the surname follows a title the stop list would otherwise eat.
 TITLE = re.compile(
-    r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Dame)\.?\s+"
-    rf"({TITLE_WORD}(?:\s+{TITLE_WORD}){{0,2}})",
+    r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Dame)\.?" + SEP +
+    rf"({TITLE_WORD}(?:{SEP}{TITLE_WORD}){{0,2}})",
 )
 B64 = re.compile(r"^[A-Za-z0-9+/]{24,}={0,2}$")
 
@@ -147,7 +152,10 @@ def digest(value: str) -> str:
 
 
 def ssn_valid(value: str) -> bool:
-    area, group, serial = value.split("-")
+    parts = [part for part in re.split(r"[-\s]+", value) if part]
+    if len(parts) != 3:
+        return False
+    area, group, serial = parts
     if area in ("000", "666") or area.startswith("9"):
         return False
     if group == "00" or serial == "0000":
@@ -164,6 +172,33 @@ ABSTRACT_SUFFIXES = ("tion", "sion", "ment", "ity", "ness", "ous", "ence", "ance
 def _abstract_noun(token: str) -> bool:
     lowered = token.lower()
     return any(lowered.endswith(suffix) for suffix in ABSTRACT_SUFFIXES)
+
+
+# A place or nationality label is only trusted when the words are actually
+# places. The small model called "Marisol Lindqvist" a place, and the veto
+# deleted a real patient with it.
+PLACE_WORDS = {
+    "ireland", "britain", "england", "scotland", "wales", "kingdom", "france",
+    "germany", "spain", "italy", "greece", "turkey", "russia", "ukraine",
+    "china", "japan", "india", "pakistan", "bangladesh", "nigeria", "kenya",
+    "ghana", "egypt", "morocco", "brazil", "mexico", "canada", "america",
+    "states", "europe", "asia", "africa", "australia", "zealand", "london",
+    "paris", "berlin", "madrid", "rome", "moscow", "ankara", "istanbul",
+    "izmir", "delhi", "mumbai", "beijing", "tokyo", "cairo", "nairobi",
+    "dublin", "edinburgh", "cardiff", "belfast", "siverek", "hilvan",
+    "edirne", "diyarbakir", "portugal", "netherlands", "belgium", "sweden",
+    "norway", "denmark", "finland", "poland", "austria", "switzerland",
+    "hungary", "romania", "bulgaria", "serbia", "croatia", "albania",
+    "northern", "southern", "eastern", "western", "republic", "island",
+    "city", "county", "province", "region", "district",
+}
+
+
+def _clean_name(name: str) -> str:
+    """Remove characters that are invisible on screen but break matching."""
+    for invisible in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"):
+        name = name.replace(invisible, "")
+    return re.sub(r"\s+", " ", name).strip()
 
 
 MAX_NER_CHARS = 40000
@@ -215,7 +250,7 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
                     start += 1
                 while end > start and not text[end - 1].isalnum():
                     end -= 1
-                name = text[start:end]
+                name = _clean_name(text[start:end])
                 # A single token is a code keyword or a label far more often
                 # than it is a person: "Model", "Return", "JSON" all qualified.
                 if " " not in name:
@@ -234,12 +269,22 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
             elif entity.label_ in NON_PERSON_LABELS:
                 if entity.label_ == "ORG":
                     lowered = entity.text.lower()
+                    # Count only real words. An HTML entity beside a name must
+                    # not turn a two-word person into a three-word company —
+                    # that is exactly what hid "Marisol Lindqvist &mdash;".
+                    words = [word for word in entity.text.split()
+                             if any(char.isalpha() for char in word)
+                             and not word.startswith("&")]
                     organised = (
-                        len(entity.text.split()) >= 3
+                        len(words) >= 3
                         or lowered.startswith(("the ", "a ", "an "))
                         or any(word in lowered for word in ORG_KEYWORDS)
                     )
                     if not organised:
+                        continue
+                else:
+                    words = {word.strip(".,'-").lower() for word in entity.text.split()}
+                    if not (words & PLACE_WORDS):
                         continue
                 blocked.append((start, end))
     return persons, blocked
@@ -485,15 +530,28 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
 
 
 def decode_blob(text: str) -> str | None:
+    """Decode a base64 blob, including a blob that was encoded twice.
+
+    Encoding a payload twice defeats a single decode, and costs an attacker one
+    more line of code.
+    """
     stripped = text.strip()
-    if not B64.match(stripped):
-        return None
-    try:
-        raw = base64.b64decode(stripped + "=" * (-len(stripped) % 4))
-        decoded = raw.decode("utf-8")
-    except Exception:  # noqa: BLE001
-        return None
-    return decoded if decoded.isprintable() else None
+    decoded: str | None = None
+    for _ in range(3):
+        if not B64.match(stripped):
+            break
+        try:
+            raw = base64.b64decode(stripped + "=" * (-len(stripped) % 4))
+            candidate = raw.decode("utf-8")
+        except Exception:  # noqa: BLE001
+            break
+        if not candidate.isprintable():
+            break
+        decoded = candidate
+        stripped = candidate.strip()
+        if not B64.match(stripped):
+            break
+    return decoded
 
 
 def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple[int, str]]:
@@ -615,13 +673,15 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    if row["carrier"] == "encoded_value":
-        decoded = decode_blob(text)
-        if decoded:
-            # The payload was encoded. Evidence stays on the encoded bytes, and
-            # the encoded token is recorded so the finding can be matched
-            # against the string that is actually in the file.
-            return decoded, digest(text)
+    # A long base64-looking string is worth decoding whatever carrier it sits
+    # in: an attribute, a comment and a script tag are all the same hiding place.
+    decoded = decode_blob(text)
+    if decoded is not None:
+        return decoded, digest(text)
+    if row["carrier"] in ("url", "page_link", "third_party"):
+        # "Rafael%20Ibarra" is a name. Evidence stays on the whole URL, so the
+        # byte range is still exact.
+        return urllib.parse.unquote(text), digest(text)
     return text, None
 
 
