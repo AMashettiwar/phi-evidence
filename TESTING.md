@@ -8,20 +8,11 @@ corpora**. Scores against any exam are produced by the examiner and are not
 recorded here.
 
 ```bash
-python fixtures/build_world.py
-python tools/check_world.py
-python tools/check_collect.py
-python tools/check_detect.py
-python tools/check_ai.py
-python tools/check_crawl.py
-python tools/check_scale.py
-python tools/lint_policy.py
-python fixtures/build_evasion.py
-python tools/check_evasion.py
-python fixtures/build_context.py
-python tools/check_context.py
-python tools/check_emit.py
+python tools/run_gates.py
 ```
+
+The ordered list of gates lives in `tools/run_gates.py` and nowhere else; CI runs
+the same file.
 
 ## What each gate proves
 

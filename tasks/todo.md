@@ -1,0 +1,101 @@
+# phi-evidence — build to the full PROMPT-v2 brief
+
+Seeded from phi-scan `main` (cb95fd8, tag `exam-ready-2026-10-30`), history kept, no remote.
+The brief: `docs/brief/PROMPT-v2.md`. Gate ledger it was decomposed into: `docs/brief/PLAN.md`.
+Rulebook (owner decisions, e.g. street address alone = Medium): `docs/brief/rulebook.md`.
+
+## Stop condition
+
+Done when **every gate below passes by command from a fresh clone and a fresh venv**, and one
+command runs the bot end to end against the live synthetic target:
+
+```
+phi-scan scan --scope fixtures/scope.yaml --out out/run   # browser + API + files -> vault -> detect -> LLM -> JSON + HTML
+phi-scan replay out/run                                   # every finding re-derived from stored bytes
+python tools/run_gates.py                                 # G0..G6, exit 0
+```
+
+Items that need people are built and packaged, then reported as **pending human**, not as done:
+G0 rulebook sign-off, G5 blind two-reviewer adjudication.
+
+## Decisions and deviations (stated, not silent)
+
+- LLM provider: **Groq** (OpenAI-compatible HTTP, stdlib client). Key read from `GROQ_API_KEY` or
+  the git-ignored `.env`. The model only ever sees redacted spans of synthetic data.
+- Groq has no dated model snapshots: record model id + `system_fingerprint` per call; stability is
+  measured (k=3, Fleiss kappa), not assumed.
+- Synthea (Java) is not used: Faker for format variants, real FHIR R4 / HL7v2 / DICOM / X12 shapes.
+- SNOMED, LOINC tables are licensed: terminology lookup uses public sets only.
+- Regimes: the brief's closed list of 11 rule ids. Other regimes stay a registry slot.
+- Corpus: 6 strata x 160 positives = 960 positives + ~700 hard negatives (>=40%). Meets both
+  PROMPT-v2 (>=150/stratum) and the >=40% negative rule.
+- "Fresh container": Docker daemon was unreachable on this machine; if still so, fresh clone +
+  fresh venv is the reproducibility proof and the Dockerfile ships marked unvalidated.
+- Benchmark circularity: the same author builds detector and benchmark. Mitigation: key hash frozen
+  before the first scored run, a held-out split never used while tuning, every miss itemised.
+  Independent validation still needs the human reviewers.
+
+## Milestones
+
+### M1 — reproducible baseline
+- [ ] `.venv` from Python 3.11; deps in `pyproject.toml` only, pinned, incl. `en_core_web_sm`
+- [ ] `_load_nlp` catches only the expected errors; gates print which name detector ran
+- [ ] reproduce the 5 CI failures without the model; confirm they vanish with it, or fix each with a test
+- [ ] `tools/run_gates.py` runs the whole TESTING.md list; CI calls it
+- **verify:** `python tools/run_gates.py` exit 0 in a fresh venv; with the model hidden it reports `regex` mode
+
+### M2 — P0 policy spec (G0)
+- [ ] `policy/phi-exposure-spec.md` covering brief 2.1-2.9 (definition, finding model, record
+      boundaries, identifiability incl. QI / small-cell, negative predicates, severity calculus,
+      closed legal list incl. AHA v. Becerra, discovery protocol, invariants)
+- [ ] `rules.yaml` = the 11 ids, each quote verified against stored eCFR text
+- [ ] `identifiers.yaml` 18/18 with validator + mask + suppressible
+- [ ] every negative predicate names >=1 fixture
+- **verify (G0):** `python tools/gate_g0.py` -> 11/11 rule ids resolve, 0 quote mismatches, 18/18 identifiers, 8/8 predicates with fixtures
+
+### M3 — P1 frozen fixtures and key (G1)
+- [ ] synthetic site: pages, hidden DOM, URL params, storage, beacons, error page, login with accounts A and B
+- [ ] synthetic API: FHIR R4 responses + one IDOR path
+- [ ] documents: PDF lab report (text layer + metadata), XLSX hidden sheet, JPEG EXIF, DOCX tracked changes
+- [ ] corpus: 6 strata x 160 positives, ~700 hard negatives, held-out split
+- [ ] answer key (item -> carrier -> byte offset -> verdict), hashed into `eval/keys/FROZEN.json`
+- **verify (G1):** `python tools/gate_g1.py` -> carriers 18/18, planted >=40, negatives >=40%, one offset per item, key hash recorded, 20-item sampler printed
+
+### M4 — P2 collection and evidence chain (G2)
+- [ ] Playwright collector: HAR + bodies + route interception, isolated profile
+- [ ] API collector from the schema; file collector for the four document types
+- [ ] scope guard (0 out-of-scope requests), rate limit (concurrency 1, >=1 s + jitter, page cap)
+- [ ] HMAC tokenisation at ingest (per-scan salt); encrypted, access-logged vault with TTL
+- [ ] evidence bundle: hashes, timestamps, versions, replay command
+- [ ] logged-out re-fetch, indexability probe (canaries only), identity oracle A/B
+- **verify (G2):** two runs byte-identical canonical JSON; out-of-scope = 0; min gap >= 1.000 s from HAR; raw planted values in artifacts = 0; 20/20 replays identical
+
+### M5 — P3 detection (G3)
+- [ ] validators: SSN, Luhn, NPI (80840), DEA, ICD-10 / LOINC / RxNorm syntax, DOB plausibility
+- [ ] MRN / member-ID format induction; FHIR, HL7v2, DICOM, X12, CSV/XLSX extractors
+- [ ] scispaCy clinical NER + public terminology; cross-carrier entity resolution
+- [ ] trackers: list + payload decode + hashed-identifier match; QI scorer; record linker
+- **verify (G3):** planted recall 100%; carrier invariance 18/18; hard negatives clean; always-flag misses 0
+
+### M6 — P4 adjudication with Groq (G4)
+- [ ] deterministic policy engine owns findings + severity; LLM proposer only (schema, evidence ids)
+- [ ] redaction before any request; injection attempts logged as findings; suppression caps
+- [ ] Groq provider: temp 0, seed, k=3, Fleiss kappa, tokens x price, p95 latency
+- **verify (G4):** 0 escapes / 25 injection pages; kappa >= 0.80; 0 always-flag suppressions / 1,000 attempts; cost reported
+
+### M7 — P5 evaluation (G5)
+- [ ] protocol + key hash frozen; power analysis printed before the run
+- [ ] runner across Presidio / rules / rules+LLM; Wilson CIs; McNemar; miss + false-alarm ledger with reason codes
+- [ ] blind-review packet for two reviewers (pending human)
+- **verify (G5):** acceptance table from the brief section 8; any undecidable threshold fails loudly
+
+### M8 — P6 report, CLI, handover (G6)
+- [ ] canonical JSON + JSON Schema (+ SARIF projection); one HTML view; `phi-scan scan|replay` CLI
+- [ ] threat model, runbook, discovery protocol, handover pack
+- **verify (G6):** 0 unmasked values in rendered HTML; schema validates; fresh clone reproduces G5 numbers
+
+### M9 — end to end from scratch
+- [ ] fresh clone, fresh venv, `run_gates.py` + the e2e command above, numbers match the committed ledger
+
+## Review
+(filled in at the end)

@@ -34,7 +34,7 @@ Two commands. The first builds a synthetic clinic with 60 hidden leaks and scans
 it; nothing real is touched, and no patient data exists anywhere in the output.
 
 ```bash
-python -m pip install pyyaml
+python -m pip install -r requirements.lock
 python -m phi_scan.cli demo
 ```
 
@@ -58,19 +58,14 @@ python -m phi_scan.cli scan --source ./my-export --out ./artifacts/mine
 python -m phi_scan.cli crawl --url https://example.com --out ./artifacts/site
 ```
 
-The NLP model is optional. Without it the scanner falls back to regex names and
-loses roughly 10 points of recall on prose; structured data does not need it.
-
-```bash
-python -m pip install spacy && python -m spacy download en_core_web_sm
-```
+The spaCy model is required and pinned in `requirements.lock`. A missing model is
+an error, not a silent fallback to regex names: that fallback once let the same
+commit pass on one machine and fail in CI.
 
 ### Verify the whole thing
 
 ```bash
-python tools/check_detect.py     # 60/60, zero false alarms
-python tools/lint_policy.py      # 11 quotes still match the source text
-python tools/check_ai.py         # the AI layer cannot make it worse
+python tools/run_gates.py        # every gate, in order; exit 0 means all passed
 ```
 
 ### Using it as a library
@@ -107,9 +102,7 @@ files or a crawl
                 remove, or promote anything, and never sees a patient value.
 ```
 
-**The model is optional.** Without spaCy the scanner falls back to regex names
-and loses roughly 10 points of recall on prose. Structured data does not need it
-at all — see below.
+Structured data does not use the model at all — see below.
 
 ## Structured data is read by its keys, not by a model
 

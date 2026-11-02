@@ -7,10 +7,12 @@ name = "phi-scan"
 version = "0.1.0"
 description = "Read-only scanner that finds patient data exposed by a website or health system, and explains each finding in plain English."
 requires-python = ">=3.11"
-dependencies = ["pyyaml>=6.0"]
-
-[project.optional-dependencies]
-nlp = ["spacy>=3.7"]
+# Direct dependencies. requirements.lock pins every transitive one; install from it.
+dependencies = [
+    "pyyaml==6.0.3",
+    "spacy==3.7.5",
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl",
+]
 
 [project.scripts]
 phi-scan = "phi_scan.cli:main"

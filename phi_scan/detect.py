@@ -59,23 +59,21 @@ _NAME_CACHE_MAX = 20000
 
 
 def _load_model():
-    """Load the NER model once. A missing model is a supported state, not a crash.
+    """Load the NER model once. A missing model is an error, not a fallback.
 
-    The model name is configurable so that two models can be compared with the
-    same code, and so a deployment can pin an exact model.
+    A silent fallback to regex names changed the results without saying so: the
+    same commit passed in one environment and failed in CI. The model name is
+    configurable so that two models can be compared with the same code.
     """
     global _NLP, _NLP_LOADED
     if _NLP_LOADED:
         return _NLP
+    import os  # noqa: PLC0415
+
+    import spacy  # noqa: PLC0415
+
+    _NLP = spacy.load(os.environ.get("PHI_SCAN_MODEL", "en_core_web_sm"))
     _NLP_LOADED = True
-    try:
-        import os  # noqa: PLC0415
-
-        import spacy  # noqa: PLC0415
-
-        _NLP = spacy.load(os.environ.get("PHI_SCAN_MODEL", "en_core_web_sm"))
-    except Exception:  # noqa: BLE001
-        _NLP = None
     return _NLP
 
 
@@ -128,7 +126,9 @@ IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 # that "İbrahim" and "Güzeler" count as capitalised and "turkey" does not.
 # An apostrophe is only part of a word when a letter follows it, so a closing
 # quote is never absorbed: 'Rahimi' must not become "Rahimi'".
-WORD = r"[^\W\d_](?:[\w\-]|'(?=[^\W\d_]))*"
+# No underscore: "DEMO_PATIENT_MRN" is a code identifier, and admitting it let
+# "Bhatt DEMO_PATIENT_MRN" outgrow "Freya Bhatt" on an .env line.
+WORD = r"[^\W\d_](?:[^\W_]|-|'(?=[^\W\d_]))*"
 TITLE_WORD = rf"{WORD}\.?"
 # A lookahead, so every adjacent pair is considered. A consuming pattern eats
 # the second word of a rejected pair: in "for Emeka Delgado", ("for","Emeka")
@@ -263,9 +263,6 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
     persons: list[tuple[int, int, int, str]] = []
     blocked: list[tuple[int, int]] = []
     nlp = _load_model()
-    if nlp is None:
-        return persons, blocked
-
     for offset, chunk in _windows(text, MAX_NER_CHARS):
         try:
             doc = nlp(chunk)

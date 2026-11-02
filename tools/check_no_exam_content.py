@@ -6,9 +6,8 @@ in CI with the key supplied as a secret, never committed:
 
     python tools/check_no_exam_content.py --key /path/to/key.json
 
-With no key supplied the check still runs a structural sweep for things that must
-never appear in a public repository: the sealed directory itself, and any file
-whose name looks like a scored key or report.
+With no key supplied the check still runs a structural sweep for the one thing
+that must never appear in a public repository: anything under a sealed/ directory.
 
 The tool prints counts only. It never echoes a key value, so running it cannot
 leak what it is protecting.
