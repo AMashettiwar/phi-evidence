@@ -53,13 +53,15 @@ def test_one_record_across_several_elements(tmp_path, monkeypatch):
 
 
 def test_consented_testimonial_layouts(tmp_path, monkeypatch):
-    from probes_prose import CARD_WITHOUT_NOTE, CONSENT_LAYOUTS, MULTI_BLOCK_CONSENT, TWO_STORIES
+    from probes_prose import (CARD_WITHOUT_NOTE, CITE_QUOTE, CITE_QUOTE_NO_NOTE, CONSENT_LAYOUTS,
+                              MULTI_BLOCK_CONSENT, TWO_STORIES)
 
     monkeypatch.setenv("PHI_EVIDENCE_KEYS", str(tmp_path / "keys"))
     src = tmp_path / "src"
     src.mkdir()
-    clean = dict(CONSENT_LAYOUTS, **MULTI_BLOCK_CONSENT)
-    pages = dict(clean, two_stories=TWO_STORIES, card_without_note=CARD_WITHOUT_NOTE)
+    clean = dict(CONSENT_LAYOUTS, **MULTI_BLOCK_CONSENT, cite_quote=CITE_QUOTE)
+    pages = dict(clean, two_stories=TWO_STORIES, card_without_note=CARD_WITHOUT_NOTE,
+                 cite_quote_no_note=CITE_QUOTE_NO_NOTE)
     for name, body in pages.items():
         (src / f"{name}.html").write_text(f"<html><body><h1>Stories</h1>{body}</body></html>",
                                           encoding="utf-8")
@@ -73,3 +75,4 @@ def test_consented_testimonial_layouts(tmp_path, monkeypatch):
     assert any(vault.token("Ana Ruiz") in f["value_hashes"] for f in two)
     assert not any(vault.token("Priya Nair") in f["value_hashes"] for f in two)
     assert any(f["path"] == "card_without_note.html" for f in findings)
+    assert any(f["path"] == "cite_quote_no_note.html" for f in findings)

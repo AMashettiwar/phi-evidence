@@ -41,7 +41,8 @@ IDENTIFYING_SEGMENT = re.compile(r"\d{5,}|[A-Z][a-z]+[-_][A-Z][a-z]+")
 def scan_live(scope_path: Path, out: Path, provider=None) -> dict:
     record = capture(scope_path, out)["capture"]
     scope = load_scope(scope_path)
-    own = frozenset(a["patient_id"] for a in scope["accounts"] if a["name"] == scope["scan_as"])
+    own = frozenset(str(a["patient_id"]) for a in scope.get("accounts") or []
+                    if a.get("name") == scope.get("scan_as") and a.get("patient_id"))
     cleared: list[dict] = []
     findings = detect(out / "index.jsonl", out / "vault", (), context="public-web",
                       measured=record["audience"], own_ids=own, cleared=cleared)

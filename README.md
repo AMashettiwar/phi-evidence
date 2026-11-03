@@ -7,6 +7,9 @@ It never writes to the target, never stores a patient value in its output, and
 never asserts that a law has been broken. It reports what it found, where it
 found it, and how confident it can be.
 
+**Not a programmer?** Read [START-HERE.md](START-HERE.md): double-click
+`install.bat` once, then `start.bat`, and fill in a form in your browser.
+
 ---
 
 ## What it actually finds

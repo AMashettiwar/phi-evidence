@@ -94,3 +94,11 @@ MULTI_BLOCK_CONSENT = {
     "card_wrapped_note": f"<div class='story'><div class='card'><h3>Priya Nair</h3><p>{CONSENT_STORY}</p></div><p>Shared with permission</p></div>",
 }
 CARD_WITHOUT_NOTE = f"<div class='card'><h3>Priya Nair</h3><p>{CONSENT_STORY}</p></div><small>Updated May 2026</small>"
+
+# Disclosed (eval/disclosures.md): taken from the held-out N8 template after
+# G5 run 6, at the owner's decision. A quotation whose speaker sits in an
+# inline <cite> with no space before it, and a consent note in the next block.
+CITE_QUOTE = ('<blockquote>"I live with type 2 diabetes. The support group helped."'
+              '<cite>Priya Nair</cite></blockquote><p>Published with the person\'s consent.</p>')
+CITE_QUOTE_NO_NOTE = ('<blockquote>"I live with type 2 diabetes. The support group helped."'
+                      '<cite>Priya Nair</cite></blockquote><p>Thanks for reading.</p>')

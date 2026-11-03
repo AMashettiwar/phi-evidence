@@ -132,8 +132,19 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
   layout never seen in development; rules vs rules+LLM b=1 c=1 (neutral)
 - M9 fresh clone: 22/24 gates; rules/Presidio arms and rules ledger byte-identical. Kappa 0.643 in
   the clone vs 0.820 here: the LLM stability criterion is not reliably met
-- **open decision for the owner:** inspect the held-out consent items to fix the last false alarms
-  (and disclose it), or keep them blind
+- owner chose "inspect and disclose" (2026-11-03): `eval/disclosures.md`. One template opened
+  (N8.blockquote); consent needle now ignores spacing; held-out N8.blockquote 18 -> 0 flagged.
+  N8's held-out number is a development number from here on; other held-out strata stay blind
+
+### Launch without a terminal (2026-11-03)
+- [x] `install.bat` / `start.bat` -> `phi_scan/launcher.py`: a form on 127.0.0.1:8765 (token +
+  Host check), scope written for the scan only, cookies never saved, results in ~/PHI-Scans
+- [x] scope needs only `target`; accounts optional; a whole Cookie line accepted; logout and
+  sign-out paths never fetched
+- [x] access test finds record addresses itself: every OpenAPI/Swagger description at the usual
+  paths, or the scope's `api` section; `capture.json` -> `access_test` says what ran or why not
+- [x] `START-HERE.md` for people who do not run code
+- **verify:** G2 and G6 pass (L071 High via auto-discovery); launcher run on the served site
 - deviation: procedures and tests are recognised by medical word formation and a short noun list,
   British spellings folded; licensed SNOMED/CPT unavailable, public ICD-10-PCS not downloaded
 

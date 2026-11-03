@@ -190,6 +190,14 @@ def _plain(markup: str) -> str:
     return WHITESPACE.sub(" ", html.unescape(TAG.sub(" ", markup))).strip()
 
 
+def _squash(text: str) -> str:
+    """Text with all whitespace and separators removed, for matching a record to
+    the page. The renderer joins inline elements with no space ('helped."<cite>
+    Christopher Ellis') and markup stripping puts a space at every tag; the two
+    agree only once spacing is ignored."""
+    return re.sub(r"[\s|]+", "", text)
+
+
 def _needle(record: Record) -> str:
     """The record's text as page blocks spell it. The renderer joins a record's
     blocks with " | " ("Priya Nair | her story"); the page has no pipes, so a
@@ -216,7 +224,7 @@ def containing_blocks(record: Record) -> list[tuple[str, str, str]]:
         if closing is None:
             continue
         text = _plain(record.page[opening.end():closing.start()])
-        if needle in text:
+        if _squash(needle) in _squash(text):
             following = record.page[closing.end():closing.end() + 400]
             next_block = BLOCK_OPEN.search(following)
             note = _plain(following[:next_block.start()] if next_block else following)[:120]
@@ -236,7 +244,9 @@ def consented_testimonial(record: Record) -> str | None:
             return f'a visible consent marker: "{match.group(0)}"'
     for note in adjacent_notes(record):
         match = CONSENT.search(note)
-        if match and len(match.group(0)) >= len(note) / 2:
+        # The note is about consent: the marker is most of it, or opens it
+        # ("Dramatisation based on composite cases.").
+        if match and (len(match.group(0)) >= len(note) / 2 or match.start() == 0):
             return f'a consent note beside the record: "{match.group(0)}"'
     return None
 
@@ -251,7 +261,7 @@ def adjacent_notes(record: Record) -> list[str]:
     for opening in BLOCK_OPEN.finditer(record.page):
         tag = opening.group(1).lower()
         closing = re.compile(rf"</{tag}\s*>", re.I).search(record.page, opening.end())
-        if closing and needle and needle in _plain(record.page[opening.end():closing.start()]) \
+        if closing and needle and _squash(needle) in _squash(_plain(record.page[opening.end():closing.start()])) \
                 and (best is None or closing.end() - opening.start() < best[1] - best[0]):
             best = (opening.start(), closing.end())
     if best is None:

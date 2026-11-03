@@ -7,6 +7,11 @@ Steps for the operator. Read `docs/threat-model.md` first, and complete `docs/di
 every finding's evidence. `--llm auto|groq|stub|none` chooses the review model (auto = Groq when
 `GROQ_API_KEY` is set). `tools/gate_g6.py` runs exactly this command against the synthetic site.
 
+**Without a terminal.** `install.bat` then `start.bat` (or `python -m phi_scan.launcher`) open a
+form on `http://127.0.0.1:8765/` that writes the scope, runs the same scan and replay, and shows
+the result. Results go to `~/PHI-Scans/<site>-<time>/`; cookies are never written there.
+`START-HERE.md` is the guide for people who do not run code.
+
 ## 1. Prerequisites
 
 - Python 3.11
@@ -18,20 +23,23 @@ every finding's evidence. `--llm auto|groq|stub|none` chooses the review model (
 
 Start from `fixtures/scope.yaml`. A real engagement replaces it with the signed scope. Keep it outside the repository: it holds session cookies.
 
+Only `target` is required; every other field has a safe default.
+
 | Field | Meaning |
 |---|---|
 | `target` | Base URL where crawling starts. |
-| `in_scope.hosts` | Exact `host:port` values the scan may request. Anything else is refused. |
+| `in_scope.hosts` | Exact `host:port` values the scan may request. Anything else is refused. Default: the target's host. |
 | `out_of_scope.hosts` | Hosts that must never be requested (for example a tracker). What pages send there is observed, not requested. |
-| `out_of_scope.paths` | Paths never fetched on in-scope hosts. Put logout and any state-changing GET here. |
-| `accounts` | The provisioned test accounts: `name`, `cookie` (session cookie as `name=value`), `patient_id`. The scanner presents the cookie and never submits a login form. |
-| `scan_as` | Which account the crawl uses. The other account is used for the differential access test. |
-| `rate_limit` | `concurrency` (1), `min_interval_seconds`, `jitter_seconds`, `page_cap`. |
+| `out_of_scope.paths` | Paths never fetched on in-scope hosts. Put any state-changing GET here. Logout and sign-out paths are refused without being listed. |
+| `accounts` | Optional test accounts: `name`, `cookie` (one `name=value` or a whole Cookie line copied from the browser, `a=1; b=2`), optional `patient_id`. The scanner presents the cookies and never submits a login form. Without accounts only public pages are scanned. |
+| `scan_as` | Which account the crawl uses (default: the first). The other account is used for the differential access test. |
+| `api` | Optional. `schema` (path of the OpenAPI/Swagger description), `self` (the "my record" path, e.g. `/api/patients/me`), `by_id` (e.g. `/api/patients/{id}`). Without it the scan reads every description found at the usual paths (`/openapi.json`, `/swagger.json`, `/v3/api-docs`, ...). `capture.json` → `access_test` says what ran, or why not. |
+| `rate_limit` | `concurrency` (1), `min_interval_seconds` (never below 1), `jitter_seconds`, `page_cap` (200). |
 | `stop_conditions` | Documented stops: 429, three server errors in a row, page cap, redirect out of scope. |
 
 ## 3. Provision two test accounts
 
-Create accounts A and B on the target, each with its own synthetic patient record. Put each session cookie and patient id in `accounts`. The scan asks whether A can read B's record, and treats A's own record as not a finding. Use test data only; do not use real patients.
+Create accounts A and B on the target, each with its own synthetic patient record. Put each session cookie in `accounts`; `patient_id` is needed only when the "my record" response does not carry an `id` field. The scan asks whether A can read B's record, and treats A's own record as not a finding. Use test data only; do not use real patients.
 
 ## 4. Groq key (optional AI review)
 

@@ -69,6 +69,14 @@ DUMP_INDEXEDDB = """async () => {
   }
   return out;
 }"""
+# Where sites publish an API description, in the order they are tried.
+SCHEMA_PATHS = ("/openapi.json", "/swagger.json", "/api/openapi.json", "/api/swagger.json",
+                "/v3/api-docs", "/v2/api-docs", "/swagger/v1/swagger.json", "/api-docs",
+                "/api/v1/openapi.json", "/api/v2/openapi.json")
+SELF_ENDINGS = ("/me", "/self", "/current", "/profile", "/myself")
+PATH_PARAM = re.compile(r"\{[^}/]+\}")
+# A logged-in scan that followed a "Log out" link would end its own session.
+SIGN_OUT = re.compile(r"(?:^|/)(?:log|sign)[-_]?(?:out|off)(?:$|[/.])", re.I)
 HREF = re.compile(r"""(?:href|src)\s*=\s*["']([^"'#]+)""", re.I)
 
 
@@ -81,13 +89,17 @@ class Guard:
     """
 
     def __init__(self, scope: dict) -> None:
-        limits = scope["rate_limit"]
-        self.hosts = set(scope["in_scope"]["hosts"])
-        self.blocked_hosts = set(scope["out_of_scope"].get("hosts", []))
-        self.blocked_paths = set(scope["out_of_scope"].get("paths", []))
-        self.gap = float(limits["min_interval_seconds"])
-        self.jitter = float(limits.get("jitter_seconds", 0))
-        self.page_cap = int(limits["page_cap"])
+        # Every field has a safe default, so a scope that names only the
+        # target works: that host alone, one request a second, 200 pages.
+        limits = scope.get("rate_limit") or {}
+        hosts = (scope.get("in_scope") or {}).get("hosts") or [urlparse(scope["target"]).netloc]
+        blocked = scope.get("out_of_scope") or {}
+        self.hosts = set(hosts)
+        self.blocked_hosts = set(blocked.get("hosts", []))
+        self.blocked_paths = set(blocked.get("paths", []))
+        self.gap = max(1.0, float(limits.get("min_interval_seconds", 1.0)))
+        self.jitter = float(limits.get("jitter_seconds", 0.25))
+        self.page_cap = int(limits.get("page_cap", 200))
         self.random = random.Random(0)
         self.last = 0.0
         self.sent: list[dict] = []
@@ -99,7 +111,7 @@ class Guard:
     def allowed(self, url: str) -> bool:
         parsed = urlparse(url)
         return (self.stopped is None and parsed.netloc in self.hosts
-                and parsed.path not in self.blocked_paths)
+                and parsed.path not in self.blocked_paths and not SIGN_OUT.search(parsed.path))
 
     def refuse(self, url: str, method: str, headers: dict) -> None:
         self.refused.append({"url": url, "method": method,
@@ -151,23 +163,27 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
     scope = load_scope(scope_path)
     guard = Guard(scope)
     base = scope["target"].rstrip("/")
-    accounts = {a["name"]: a for a in scope["accounts"]}
-    me = accounts[scope["scan_as"]]
+    # Accounts are optional: without one, only what the public can see is scanned.
+    accounts = {a["name"]: a for a in scope.get("accounts") or [] if a.get("cookie")}
+    me = accounts.get(scope.get("scan_as")) or next(iter(accounts.values()), None)
     key = key or os.urandom(32)
     responses: dict[str, dict] = {}     # rel path -> what was served
     runtime: list[tuple[str, str, str]] = []  # (rel path, carrier, text) seen only at runtime
     blobs: dict[str, bytes] = {}        # screenshots and the HAR, vaulted after collection
 
-    def session(account: dict) -> dict:
-        name, value = account["cookie"].split("=", 1)
-        return {"name": name, "value": value, "url": base}
+    def session(account: dict) -> list[dict]:
+        """The account's cookies, from one "name=value" or a whole Cookie line
+        copied from a browser ("a=1; b=2"): most sites need several."""
+        pairs = [part.strip().split("=", 1) for part in account["cookie"].split(";") if "=" in part]
+        return [{"name": name.strip(), "value": value.strip(), "url": base} for name, value in pairs]
 
     with tempfile.TemporaryDirectory() as scratch, sync_playwright() as pw:
         mirror, har = Path(scratch) / "mirror", Path(scratch) / "scan.har"
         browser = pw.chromium.launch()
         context = browser.new_context(record_har_path=str(har), record_har_content="embed",
                                       service_workers="block")
-        context.add_cookies([session(me)])
+        if me:
+            context.add_cookies(session(me))
 
         redirects: list[str] = []
 
@@ -287,7 +303,12 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 runtime.append(("cookies", "cookie", f"{cookie['name']}={cookie['value']}"))
 
             # Identity oracle (brief 4.4): can account A read account B's record?
-            oracle = identity_oracle(pw, base, accounts, me, fetch, session)
+            if me:
+                api = find_api(pw, base, scope.get("api"), fetch)
+                oracle, access_test = identity_oracle(pw, base, accounts, me, fetch, api)
+            else:
+                oracle, access_test = {}, {"ran": False, "reason": "no test account in the scope: "
+                                                                   "public pages only"}
 
             # Audience (brief 4.3): fetch every captured URL again with no session.
             anonymous = pw.request.new_context()
@@ -325,13 +346,14 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
 
     record = {
         "target": base,
-        "scan_as": scope["scan_as"],
+        "scan_as": me["name"] if me else "public visitor",
         "pages": len(seen),
         "requests_sent": len(guard.sent),
         "requests_refused_out_of_scope": len(guard.refused),
         "write_requests_blocked": len(guard.writes_blocked),
         "stopped": guard.stopped,
         "audience": audience,
+        "access_test": access_test,
         "cached_publicly": sorted(r for r, v in responses.items() if "public" in v["cache"]),
         "noindex": sorted(r for r, v in responses.items() if "noindex" in v["robots"]),
         "evidence": {name: vault.put(data) for name, data in sorted(blobs.items())},
@@ -343,36 +365,100 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
     return {**manifest, "capture": record}
 
 
-def identity_oracle(pw, base: str, accounts: dict, me: dict, fetch, session) -> dict:
-    """Differential access test: fetch each account's own record, then each
-    record by id as the scanning account. A record that arrives for an id that
-    is not ours, and matches another account's own record, is read across
-    accounts. Returns audience labels for the record files captured.
+def find_api(pw, base: str, configured: dict | None, fetch) -> dict:
+    """Where the access test looks: the scope's `api` section if it names both
+    endpoints, otherwise the site's own published OpenAPI or Swagger description.
+    A person running the scan does not need to know the API at all.
+
+    by_id: GET paths with exactly one path parameter ("/api/patients/{id}")
+    self:  GET paths with none that end like "/me" ("/api/patients/me")
     """
-    schema_status, _, schema = fetch(pw.request.new_context(), base + "/api/v2/openapi.json",
-                                     store=False)
-    if schema_status != 200:
-        return {}
-    templates = [p for p, ops in json.loads(schema)["paths"].items()
-                 if "get" in ops and "{id}" in p]
-    own_records = {}
+    configured = dict(configured or {})
+    found = {"self": [configured["self"]] if configured.get("self") else [],
+             "by_id": [configured["by_id"]] if configured.get("by_id") else [],
+             "source": "scope file" if configured else "none found"}
+    if found["self"] and found["by_id"]:
+        return found
+    anonymous = pw.request.new_context()
+    sources: list[str] = []
+    try:
+        for path in ([configured["schema"]] if configured.get("schema") else SCHEMA_PATHS):
+            status, _, body = fetch(anonymous, urljoin(base + "/", path.lstrip("/")), store=False)
+            try:
+                document = json.loads(body) if status == 200 else None
+            except ValueError:
+                document = None
+            if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
+                continue
+            servers = document.get("servers") or [{}]
+            prefix = (urlparse(servers[0].get("url", "")).path or document.get("basePath", "")).rstrip("/")
+            gets = [prefix + p for p, ops in document["paths"].items() if isinstance(ops, dict) and "get" in ops]
+            # A site can publish several descriptions (an old v1 and a current v2);
+            # read them all, since the "my record" address may be in only one.
+            found["by_id"] += [p for p in gets if len(PATH_PARAM.findall(p)) == 1 and p not in found["by_id"]]
+            found["self"] += [p for p in gets if not PATH_PARAM.search(p) and p not in found["self"]
+                              and p.rstrip("/").lower().endswith(SELF_ENDINGS)]
+            sources.append(path)
+    finally:
+        anonymous.dispose()
+    if sources:
+        found["source"] = ", ".join(sources)
+    return found
+
+
+def _record_id(body: bytes) -> str | None:
+    try:
+        record = json.loads(body)
+    except ValueError:
+        return None
+    if isinstance(record, dict):
+        for key in ("id", "patient_id", "patientId", "user_id", "userId", "uuid"):
+            if isinstance(record.get(key), (str, int)):
+                return str(record[key])
+    return None
+
+
+def identity_oracle(pw, base: str, accounts: dict, me: dict, fetch, api: dict) -> tuple[dict, dict]:
+    """Differential access test (brief 4.4): fetch each account's own record,
+    then each record by id as the scanning account. A record that arrives for an
+    id that is not ours, and matches another account's own record, is read
+    across accounts. Returns audience labels for the record files captured and a
+    plain summary of what ran, or why it could not.
+    """
+    if not api["by_id"]:
+        return {}, {"ran": False, "reason": "the site publishes no API description and the scope "
+                                             "names no record address (api.by_id)"}
+    own_records, ids = {}, {}
     for name, account in accounts.items():
-        as_account = pw.request.new_context(extra_http_headers={"Cookie": account["cookie"]})
-        _, _, body = fetch(as_account, base + "/api/v2/patients/me", store=name == me["name"])
-        own_records[name] = body
-        as_account.dispose()
+        ids[name] = str(account["patient_id"]) if account.get("patient_id") else None
+        for path in api["self"][:1]:
+            as_account = pw.request.new_context(extra_http_headers={"Cookie": account["cookie"]})
+            status, _, body = fetch(as_account, base + path, store=name == me["name"])
+            as_account.dispose()
+            if status == 200:
+                own_records[name] = body
+                ids[name] = ids[name] or _record_id(body)
+    known = {name: value for name, value in ids.items() if value}
+    if not known:
+        return {}, {"ran": False, "reason": "no account's own record id is known: add patient_id "
+                                             "to an account, or api.self to the scope"}
     labels = {}
     as_me = pw.request.new_context(extra_http_headers={"Cookie": me["cookie"]})
-    for template in templates:
-        for name, account in sorted(accounts.items()):
-            url = base + template.replace("{id}", account["patient_id"])
+    for template in api["by_id"]:
+        for name, value in sorted(known.items()):
+            url = base + PATH_PARAM.sub(value, template, count=1)
             status, headers, body = fetch(as_me, url)
             if status != 200:
                 continue
             rel = local_path(url, headers.get("content-type", ""))
             if name == me["name"]:
                 labels[rel] = "authenticated_self"
-            elif body == own_records[name]:
+            elif body == own_records.get(name):
                 labels[rel] = "authenticated_other"
     as_me.dispose()
-    return labels
+    summary = {"ran": True, "api_description": api["source"], "record_addresses": len(api["by_id"]),
+               "accounts": len(known),
+               "records_read_across_accounts": sum(v == "authenticated_other" for v in labels.values())}
+    if len(known) < 2:
+        summary["note"] = "one account only: a second test account is needed to test cross-account access"
+    return labels, summary
