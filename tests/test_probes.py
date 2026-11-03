@@ -31,3 +31,22 @@ def test_independent_prose_probes(tmp_path, monkeypatch):
     flagged = [text for index, text in enumerate(NEGATIVES)
                if any(f["path"] == f"n{index:02d}.html" for f in findings)]
     assert missed == [] and flagged == []
+
+
+def test_one_record_across_several_elements(tmp_path, monkeypatch):
+    from probes_prose import LAYOUT_NAME, LAYOUTS
+
+    monkeypatch.setenv("PHI_EVIDENCE_KEYS", str(tmp_path / "keys"))
+    src = tmp_path / "src"
+    src.mkdir()
+    for name, body in LAYOUTS.items():
+        (src / f"{name}.html").write_text(f"<html><body>{body}<p>Thanks.</p></body></html>",
+                                          encoding="utf-8")
+    collect(src, tmp_path / "run")
+    findings = [f for f in detect(tmp_path / "run" / "index.jsonl", tmp_path / "run" / "vault", (),
+                                  context="public-web") if f["level"] != "review"]
+    vault = Vault(tmp_path / "run" / "vault")
+    missed = [name for name in LAYOUTS
+              if not any(vault.token(LAYOUT_NAME) in f["value_hashes"]
+                         for f in findings if f["path"] == f"{name}.html")]
+    assert missed == []

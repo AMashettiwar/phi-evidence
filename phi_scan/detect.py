@@ -307,6 +307,12 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
                 cut = NAME_BREAK.search(text, start, end)
                 if cut:
                     end = cut.start()
+                # Nor does it run into the next field: "Rowan Ellis Diagnosis:
+                # CKD" came back as one person. A word followed by a colon is a
+                # label, and the name ends before it.
+                label = NEXT_LABEL.search(text, start, min(len(text), end + 1))
+                if label and label.start() > start:
+                    end = label.start()
                 name = _clean_name(text[start:end])
                 # A single token is a code keyword or a label far more often
                 # than it is a person: "Model", "Return", "JSON" all qualified.
@@ -747,6 +753,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
 JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
 POSSESSIVE = re.compile(r"['’]s$")
+NEXT_LABEL = re.compile(r"\s+[A-Za-z][A-Za-z#]{1,20}:")
 STREET_WORDS = {"lane", "street", "road", "drive", "avenue", "boulevard", "parkway", "highway"}
 ADDRESS_BEFORE = re.compile(r"\d+[A-Za-z]?\s+(?:[A-Z][\w'.-]*\s+){0,3}$")
 NAME_BREAK = re.compile(r"\s+[-–—|:;]\s*|\s*[|;]\s*")

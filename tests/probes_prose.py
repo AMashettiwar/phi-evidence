@@ -51,3 +51,17 @@ NEGATIVES = [
     "Join Marcus Hale and Priya Nair at the summer volunteer picnic.",
     "Melanoma awareness month starts in May; book a free skin check.",
 ]
+
+# One visual record spread over several elements (written after G5 run 3 to
+# test a layout hypothesis, without opening a held-out item). Label/value spans
+# in sibling <div>s with no shared container are a stated limit, not probed.
+LAYOUT_NAME = "Rowan Ellis"
+LAYOUTS = {
+    "card": "<div class='card'><h3>Rowan Ellis</h3><p>chronic kidney disease</p></div>",
+    "definition_list": "<dl><dt>Patient</dt><dd>Rowan Ellis</dd><dt>Diagnosis</dt><dd>chronic kidney disease</dd></dl>",
+    "line_breaks": "<p>Patient: Rowan Ellis<br>Diagnosis: chronic kidney disease</p>",
+    "section": "<section><h2>Rowan Ellis</h2><p>Living with chronic kidney disease.</p></section>",
+    "nested_list_item": "<ul><li><strong>Rowan Ellis</strong><p>chronic kidney disease</p></li></ul>",
+    "figure_alt": "<figure><img alt='Rowan Ellis' src='x.jpg'><figcaption>chronic kidney disease support group</figcaption></figure>",
+    "article": "<article><h1>Rowan Ellis</h1><p>Diagnosed with chronic kidney disease in 2019.</p></article>",
+}

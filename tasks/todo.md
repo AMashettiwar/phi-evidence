@@ -121,6 +121,15 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
   25% cap) so rules+LLM can differ from rules; the rulebook says the AI never chooses a level
 - **pending human:** blind review (`eval/review_packet.csv`, `python -m eval.adjudication`)
 
+### G5 scored runs (protocol frozen before the first)
+- run 1: S1 0.881 (held-out 0.562), S4 0.938, false alarms 15/720 -> fixes from dev errors only
+- run 2: S4 1.000, false alarms 0/720, precision 1.000; S1 0.894 (held-out 0.500)
+- split design flaw: items rotate through templates by index and every 5th is held out, so some
+  templates exist only in held-out. Held-out therefore measures unseen templates. Not inspected;
+  instead `tests/probes_prose.py` (40 independent items) found the general gaps -> run 3
+- deviation: procedures and tests are recognised by medical word formation and a short noun list,
+  British spellings folded; licensed SNOMED/CPT unavailable, public ICD-10-PCS not downloaded
+
 ### M5 — P3 detection (G3)
 - [ ] validators: SSN, Luhn, NPI (80840), DEA, ICD-10 / LOINC / RxNorm syntax, DOB plausibility
 - [ ] MRN / member-ID format induction; FHIR, HL7v2, DICOM, X12, CSV/XLSX extractors

@@ -19,6 +19,7 @@ Static collection can only produce B. That is deliberate, and it is reported.
 from __future__ import annotations
 
 import hashlib
+from html.parser import HTMLParser
 import json
 import re
 import sys
@@ -118,19 +119,122 @@ def _gaps(data: str, excluded: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return kept
 
 
-INLINE_TAGS = re.compile(r"</?(?:span|b|i|em|strong|a|small|sup|sub|font|mark|u|s|abbr|code)\b[^>]*>", re.I)
-LINE_BREAKS = re.compile(r"[ \t]*\n\s*")
-# A table row is one record (spec 2.3): its cells stay on one line.
-CELL = re.compile(r"</t[dh]>\s*<t[dh]\b[^>]*>", re.I)
+class _Node:
+    __slots__ = ("tag", "attrs", "children")
+
+    def __init__(self, tag: str, attrs: dict) -> None:
+        self.tag, self.attrs, self.children = tag, attrs, []
+
+
+class _Tree(HTMLParser):
+    """A forgiving DOM: enough structure to know which element holds which text."""
+    VOID = {"br", "img", "hr", "input", "meta", "link", "source", "wbr", "area", "col"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.root = _Node("root", {})
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = _Node(tag, dict(attrs))
+        self.stack[-1].children.append(node)
+        if tag not in self.VOID:
+            self.stack.append(node)
+
+    def handle_endtag(self, tag):
+        for depth in range(len(self.stack) - 1, 0, -1):
+            if self.stack[depth].tag == tag:
+                del self.stack[depth:]
+                return
+
+    def handle_data(self, data):
+        self.stack[-1].children.append(data)
+
+
+# One record each, by element (spec 2.3 and the rulebook: a list item, a table
+# row, a set of fields), plus a figure with its caption and a quotation.
+RECORD_ELEMENTS = {"li", "tr", "dl", "figure", "blockquote", "fieldset", "form", "address"}
+CONTAINERS = {"div", "section", "article", "aside"}
+HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+SKIP = {"script", "style", "noscript", "template", "head", "title"}
+INLINE = {"span", "b", "i", "em", "strong", "a", "small", "sup", "sub", "font", "mark", "u",
+          "s", "abbr", "code", "label", "cite", "time", "q"}
+
+
+def _text(node, separator: str = " | ") -> str:
+    """Text of a subtree: inline elements join with nothing, <br> with a
+    space, block children with a separator, image alt text included."""
+    if isinstance(node, str):
+        return node
+    if node.tag in SKIP:
+        return ""
+    if node.tag == "br":
+        return " "
+    if node.tag == "img":
+        return f" {node.attrs.get('alt') or ''} "
+    parts = []
+    for child in node.children:
+        piece = _text(child, separator)
+        block = not isinstance(child, str) and child.tag not in INLINE and child.tag not in ("br", "img")
+        parts.append(f"{separator}{piece}{separator}" if block and piece.strip() else piece)
+    joined = "".join(parts)
+    joined = re.sub(r"(\s*\|\s*)+", " | ", joined) if separator == " | " else joined
+    return " ".join(joined.split()).strip(" |")
+
+
+def _blocks(node) -> list:
+    return [c for c in node.children if not isinstance(c, str) and c.tag not in INLINE
+            and c.tag not in SKIP and c.tag not in ("br", "img")]
+
+
+def _is_card(node) -> bool:
+    """A small container about one subject: a heading or a lead element and at
+    most two short blocks after it, with no records of its own inside."""
+    blocks = _blocks(node)
+    if not 2 <= len(blocks) <= 3 or len(_text(node)) > 300:
+        return False
+    if any(b.tag in RECORD_ELEMENTS or b.tag in CONTAINERS for b in blocks):
+        return False
+    return blocks[0].tag in HEADINGS or blocks[0].tag in ("p", "div") and len(_text(blocks[0])) <= 60
+
+
+def _records(node, out: list[str]) -> None:
+    for child in node.children:
+        if isinstance(child, str):
+            if child.strip():
+                out.append(" ".join(child.split()))
+            continue
+        if child.tag in SKIP:
+            continue
+        if child.tag in RECORD_ELEMENTS or (child.tag in CONTAINERS and _is_card(child)):
+            text = _text(child)
+            if text:
+                out.append(text)
+        elif child.tag in INLINE or not _blocks(child):
+            # An inline run, or a leaf block (a paragraph, a heading, a cell):
+            # one record, with <br> as a space and split spans rejoined.
+            text = _text(child)
+            if text:
+                out.append(text)
+        else:
+            _records(child, out)
 
 
 def _rendered_text(text: str) -> str:
-    """The page as a reader sees it: inline tags vanish without a space, block
-    tags become line breaks. A name split across spans ("Na</span><span>dia")
-    is one word on screen and must be one word to the detector."""
-    body = SCRIPT_BLOCK.sub("\n", STYLE_BLOCK.sub("\n", COMMENT.sub("\n", text)))
-    body = CELL.sub(" | ", body)
-    return LINE_BREAKS.sub("\n", TAG.sub("\n", INLINE_TAGS.sub("", body))).strip()
+    """The page as a reader sees it, one record per line. A record is a list
+    item, a table row, a definition list, a figure, a quotation, a set of form
+    fields, an address, or a small card (a heading and a block or two); any
+    other block is its own record. Inline tags vanish without a space, so a
+    name split across spans ("Na</span><span>dia") is one word again."""
+    tree = _Tree()
+    try:
+        tree.feed(text)
+        tree.close()
+    except Exception:  # noqa: BLE001 - malformed markup still yields what parsed
+        pass
+    lines: list[str] = []
+    _records(tree.root, lines)
+    return "\n".join(line for line in lines if line)
 
 
 def _collect_html(path: str, text: str, doc: str, sink: Sink,
