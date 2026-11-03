@@ -42,6 +42,31 @@ TAG_PATTERNS = {tag: re.compile(pattern, re.I) for tag, pattern in TAGS.items()}
 # The model reads code as prose: in a stylesheet it called "@media" a disease and
 # "} }" a chemical. A mention must look like words to count.
 LABELLED_DX = re.compile(r"^dx=\S", re.M)
+# Procedures and tests. The disease/chemical model was trained on neither, so a
+# colonoscopy, a mastectomy or IVF was no health fact at all (independent
+# probes, tests/probes_prose.py). Medical word formation covers most procedures;
+# the rest are a short list of head nouns. Licensed terminologies (SNOMED, CPT)
+# would do this better; the public ICD-10-PCS was not downloaded (stated in
+# tasks/todo.md).
+PROCEDURE = re.compile(
+    r"\b[a-z]+(?:ectomy|otomy|ostomy|oscopy|plasty|centesis|pexy|rrhaphy|tripsy|graphy)\b"
+    r"|\b(?:knee|hip|joint|valve|heart|kidney|liver|lung|cornea|bone marrow)\s+"
+    r"(?:replacement|transplant(?:ation)?)\b"
+    r"|\b(?:transplant(?:ation)?|biops(?:y|ies)|dialysis|chemotherapy|radiotherapy|"
+    r"catheteri[sz]ation|stent(?:ing)?|angioplasty|ivf|in vitro fertili[sz]ation|"
+    r"physiotherapy|physio|mri|ct scan|pet scan|mammogram|transfusion|"
+    r"rotator cuff|fracture[sd]?|herniated|ligament tear)\b", re.I)
+# British spellings the model does not know: "leukaemia" found nothing.
+BRITISH = [(re.compile(p, re.I), r) for p, r in (
+    (r"aemia", "emia"), (r"haem", "hem"), (r"oedem", "edem"), (r"oesophag", "esophag"),
+    (r"paed", "ped"), (r"tumour", "tumor"), (r"foet", "fet"), (r"diarrhoea", "diarrhea"),
+    (r"oestro", "estro"), (r"gynaec", "gynec"), (r"leukaem", "leukem"))]
+
+
+def american(text: str) -> str:
+    for pattern, replacement in BRITISH:
+        text = pattern.sub(replacement, text)
+    return text
 CELL_SPLIT = re.compile(r"\s*[|;\t]\s*")
 WORDLIKE = re.compile(r"^[A-Za-z][A-Za-z0-9 ,'/()\-.]*$")
 REAL_WORD = re.compile(r"[A-Za-z]{3,}")
@@ -66,7 +91,7 @@ def entities(text: str) -> list[tuple[str, str]]:
     cached = _CACHE.get(text)
     if cached is not None:
         return cached
-    found = [(e.text, e.label_) for e in _model()(text[:MAX_CHARS]).ents]
+    found = [(e.text, e.label_) for e in _model()(american(text[:MAX_CHARS])).ents]
     if len(_CACHE) < _CACHE_MAX:
         _CACHE[text] = found
     return found
@@ -98,7 +123,7 @@ def health(text: str, names: list[str] | tuple = ()) -> tuple[bool, list[str]]:
                          # drugs; no drug name is shorter than four letters.
                          and len(name) >= 4))
                 and not any(name.strip() in person for person in names)]
-    if mentions or DISORDER.search(text):
+    if mentions or DISORDER.search(text) or PROCEDURE.search(text):
         hit = True
     evidence = " ".join(mentions) + " " + text
     found = set(tags) | {tag for tag, pattern in TAG_PATTERNS.items()

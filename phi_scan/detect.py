@@ -251,7 +251,8 @@ def _clean_name(name: str) -> str:
     """Remove characters that are invisible on screen but break matching."""
     for invisible in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"):
         name = name.replace(invisible, "")
-    return re.sub(r"\s+", " ", name).strip()
+    # "Chloe Martin's knee" names Chloe Martin; the possessive is not her name.
+    return POSSESSIVE.sub("", re.sub(r"\s+", " ", name).strip())
 
 
 MAX_NER_CHARS = 40000
@@ -317,7 +318,11 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
                 # The stop list applies to the model too. It did not before, and
                 # that is why "Lung" and "Bladder" survived as patient names.
                 tokens = [token.strip(".,'-").lower() for token in name.split()]
-                if any(token in NAME_STOP for token in tokens):
+                # A street word is a surname when no house number precedes it:
+                # "400 Harbor Way" is an address, "Lindsey Lane" is a person.
+                in_address = ADDRESS_BEFORE.search(text[max(0, start - 40):start])
+                if any(token in NAME_STOP and (in_address or token not in STREET_WORDS)
+                       for token in tokens):
                     continue
                 if _abstract_noun(tokens[-1]):
                     continue
@@ -420,7 +425,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         prefix = text[max(0, start - 5):start].strip()
         if prefix.endswith("Dr."):
             continue
-        candidates.append((2, start, end, f"{first} {last}"))
+        candidates.append((2, start, end, _clean_name(f"{first} {last}")))
 
     # "SMITH, JANE" is the same person as "Jane Smith". Two letters are
     # rejected so a city/state pair ("Bangor, ME") is never read as a name.
@@ -435,7 +440,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         if _abstract_noun(first) or any(ch.isdigit() for ch in last + first):
             continue
-        candidates.append((2, start, end, f"{first} {last}"))
+        candidates.append((2, start, end, _clean_name(f"{first} {last}")))
 
     for match in LABELED_NAME.finditer(text):
         name = _clean_name(match.group(1))
@@ -741,6 +746,9 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
 
 JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
+POSSESSIVE = re.compile(r"['’]s$")
+STREET_WORDS = {"lane", "street", "road", "drive", "avenue", "boulevard", "parkway", "highway"}
+ADDRESS_BEFORE = re.compile(r"\d+[A-Za-z]?\s+(?:[A-Z][\w'.-]*\s+){0,3}$")
 NAME_BREAK = re.compile(r"\s+[-–—|:;]\s*|\s*[|;]\s*")
 SQL_DDL = re.compile(r"^\s*(?:CREATE|ALTER|DROP|GRANT|REVOKE|SET|USE|BEGIN|COMMIT|LOCK|UNLOCK)\b", re.I)
 
@@ -917,9 +925,9 @@ def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple
                 reference = (resource.get("subject") or {}).get("reference")
                 patient = by_reference.get(reference) if reference else None
                 if patient is not None:
-                    units.append((-1, json.dumps(patient) + " " + json.dumps(resource)))
+                    units.append((-1, json.dumps(patient, ensure_ascii=False) + " " + json.dumps(resource, ensure_ascii=False)))
                 else:
-                    units.append((-1, json.dumps(resource)))
+                    units.append((-1, json.dumps(resource, ensure_ascii=False)))
             if units:
                 return units
     if path.endswith(".json") and carrier in {"api_response", "downloadable_file",
@@ -958,8 +966,8 @@ def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple
                                    if isinstance(node.get(key), (str, int))
                                    and str(node[key]) in by_id
                                    and by_id[str(node[key])] is not node), None)
-                    collected.append((-1, json.dumps(node) if target is None
-                                      else json.dumps(target) + " " + json.dumps(node)))
+                    collected.append((-1, json.dumps(node, ensure_ascii=False) if target is None
+                                      else json.dumps(target, ensure_ascii=False) + " " + json.dumps(node, ensure_ascii=False)))
                 for value in node.values():
                     walk(value)
             elif isinstance(node, list):
