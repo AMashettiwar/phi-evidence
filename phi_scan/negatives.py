@@ -83,8 +83,13 @@ def provider_staff_page(record: Record) -> str | None:
         return f"staff directory path {record.path}"
     if PHYSICIAN_MARKUP.search(record.page):
         return "schema.org Physician markup on the page"
-    if any(npi_valid(n) for n in NPI.findall(record.text)) and PROVIDER_TITLE.search(record.text):
-        return "a valid NPI next to a clinician's title"
+    # The NPI may sit in the next cell of the same table row: read the record
+    # elements that hold this text, not just the text run.
+    for text in [record.text] + [t for tag, t, _ in containing_blocks(record) if tag in RECORD_TAGS]:
+        if PATIENT_CUE.search(text):
+            return None
+        if any(npi_valid(n) for n in NPI.findall(text)) and PROVIDER_TITLE.search(text):
+            return "a valid NPI next to a clinician's title"
     return None
 
 

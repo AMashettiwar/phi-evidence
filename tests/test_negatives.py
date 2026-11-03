@@ -102,3 +102,8 @@ def test_a_caption_note_right_after_the_figure_counts():
     page = "<figure><figcaption>John Brown, living with GERD</figcaption></figure><small>Fictional account</small><p>Ana Ruiz, asthma.</p>"
     assert n.consented_testimonial(Record("John Brown, living with GERD", page=page))
     assert not n.consented_testimonial(Record("Ana Ruiz, asthma.", page=page))
+
+
+def test_npi_in_a_sibling_cell_of_the_same_row():
+    page = "<table><tr><td>Dr. Anika Wells, MD</td><td>Neurology</td><td>1234567893</td></tr></table>"
+    assert n.provider_staff_page(Record("Dr. Anika Wells, MD", page=page))

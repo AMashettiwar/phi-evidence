@@ -42,6 +42,7 @@ TAG_PATTERNS = {tag: re.compile(pattern, re.I) for tag, pattern in TAGS.items()}
 # The model reads code as prose: in a stylesheet it called "@media" a disease and
 # "} }" a chemical. A mention must look like words to count.
 LABELLED_DX = re.compile(r"^dx=\S", re.M)
+CELL_SPLIT = re.compile(r"\s*[|;\t]\s*")
 WORDLIKE = re.compile(r"^[A-Za-z][A-Za-z0-9 ,'/()\-.]*$")
 REAL_WORD = re.compile(r"[A-Za-z]{3,}")
 
@@ -71,8 +72,13 @@ def entities(text: str) -> list[tuple[str, str]]:
     return found
 
 
-def health(text: str) -> tuple[bool, list[str]]:
-    """Whether the text states a clinical fact, and its sensitivity tags."""
+def health(text: str, names: list[str] | tuple = ()) -> tuple[bool, list[str]]:
+    """Whether the text states a clinical fact, and its sensitivity tags.
+
+    names: people already found in the record. The model reads eponyms into
+    names ("David Graves" as Graves' disease, "Duane" as Duane syndrome), so a
+    mention that is, or sits inside, a person's name is not a health fact.
+    "Graves disease" written out still is."""
     hit, tags = health_hits(text)
     # A structured record's diagnosis field is health content by its label,
     # whether it holds a description or a bare code (structured.py).
@@ -80,12 +86,18 @@ def health(text: str) -> tuple[bool, list[str]]:
         hit = True
     if not any(c.isalpha() for c in text):
         return hit, tags
-    mentions = [name for name, label in entities(text)
+    # Table cells and pipe-separated fields are read one by one as well: the
+    # model found COPD in prose but not in "Danielle Martinez | COPD".
+    segments = [text] + [part for part in CELL_SPLIT.split(text) if len(part) > 2] \
+        if CELL_SPLIT.search(text) else [text]
+    mentions = [name for segment in segments for name, label in entities(segment)
                 if WORDLIKE.match(name) and REAL_WORD.search(name)
                 and (label == "DISEASE"
                      or (label == "CHEMICAL" and name.lower() not in COMMON_CHEMICALS
-                         # "INT" in a SQL schema is a type; "METFORMIN" is a drug.
-                         and not (name.isupper() and len(name) < 4)))]
+                         # "INT" in a SQL schema and "Apt" in an address are not
+                         # drugs; no drug name is shorter than four letters.
+                         and len(name) >= 4))
+                and not any(name.strip() in person for person in names)]
     if mentions or DISORDER.search(text):
         hit = True
     evidence = " ".join(mentions) + " " + text

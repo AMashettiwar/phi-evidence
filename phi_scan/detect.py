@@ -300,6 +300,12 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
                     start += 1
                 while end > start and not text[end - 1].isalnum():
                     end -= 1
+                # A name never holds a spaced dash, a pipe or a colon: the model
+                # returned "Kimberly Vazquez - moderate" for "Kimberly Vazquez -
+                # moderate persistent asthma", and the name never matched.
+                cut = NAME_BREAK.search(text, start, end)
+                if cut:
+                    end = cut.start()
                 name = _clean_name(text[start:end])
                 # A single token is a code keyword or a label far more often
                 # than it is a person: "Model", "Return", "JSON" all qualified.
@@ -735,6 +741,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
 
 JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
+NAME_BREAK = re.compile(r"\s+[-–—|:;]\s*|\s*[|;]\s*")
 SQL_DDL = re.compile(r"^\s*(?:CREATE|ALTER|DROP|GRANT|REVOKE|SET|USE|BEGIN|COMMIT|LOCK|UNLOCK)\b", re.I)
 
 
@@ -1310,7 +1317,7 @@ def detect(index_path: Path, vault_root: Path,
                 })
                 continue
 
-            has_health, tags = health(seen)
+            has_health, tags = health(seen, ids.get("names", []))
             context_health = False
             if row["carrier"] == "file_metadata" and not has_health and clinical(row["path"]):
                 # The health context comes from the file, not from this field.

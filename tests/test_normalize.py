@@ -25,3 +25,11 @@ def test_substitution_inside_dashed_identifiers():
     assert "641-12-2028" in normalize("64l-l2-2O28")
     assert normalize("Ill lol I-O") == "Ill lol I-O"
     assert normalize("Room 1O, floor 2") == "Room 1O, floor 2"
+
+
+def test_names_are_not_diseases_and_cells_are_read():
+    from phi_scan.clinical import health
+    assert health("Please welcome David Graves, our new treasurer.", ["David Graves"]) == (False, [])
+    assert health("Ana Ruiz has Graves disease.", ["Ana Ruiz"])[0]
+    assert health("Danielle Martinez | chronic obstructive pulmonary disease")[0]
+    assert not health("Harbor Health | 12 Main St Apt. 4, Bangor, ME | info@harbor.example")[0]
