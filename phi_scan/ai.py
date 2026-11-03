@@ -265,8 +265,10 @@ class GroqProvider(Provider):
         }).encode("utf-8")
         for attempt in range(5):
             began = time.monotonic()
+            # Groq's edge refuses Python's default user agent (Cloudflare 1010).
             http = urllib.request.Request(self.url, data=body, method="POST", headers={
-                "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
+                "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+                "User-Agent": "phi-scan/0.1"})
             try:
                 with urllib.request.urlopen(http, timeout=self.timeout) as response:
                     data = json.loads(response.read())
