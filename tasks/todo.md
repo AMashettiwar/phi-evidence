@@ -56,13 +56,29 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - [ ] **pending human:** rulebook sign-off -> `policy/SIGNOFF.md`
 - **verify (G0):** `python tools/gate_g0.py` -> 11/11 rule ids resolve, 0 quote mismatches, 18/18 identifiers, 8/8 predicates with fixtures
 
-### M3 — P1 frozen fixtures and key (G1)
-- [ ] synthetic site: pages, hidden DOM, URL params, storage, beacons, error page, login with accounts A and B
-- [ ] synthetic API: FHIR R4 responses + one IDOR path
-- [ ] documents: PDF lab report (text layer + metadata), XLSX hidden sheet, JPEG EXIF, DOCX tracked changes
-- [ ] corpus: 6 strata x 160 positives, ~700 hard negatives, held-out split
-- [ ] answer key (item -> carrier -> byte offset -> verdict), hashed into `eval/keys/FROZEN.json`
-- **verify (G1):** `python tools/gate_g1.py` -> carriers 18/18, planted >=40, negatives >=40%, one offset per item, key hash recorded, 20-item sampler printed
+### M3 — P1 frozen fixtures and key (G1)  (done, frozen at 70ba8b3)
+- [x] world: accounts A/B by session cookie (`fixtures/scope.yaml`), 401 when logged out,
+      `/portal/print/` public by mistake, IDOR at `/api/v2/patients/{id}`, `_headers`/`_redirects`
+- [x] world carriers added: aria_hidden, json_ld, indexeddb, cookie, response_header,
+      hidden_sheet, tracked_changes, file_metadata (docx core), speaker_notes, exif
+- [x] 4 missing negative fixtures; `negatives.yaml` points at real world files
+- [x] corpus: 6 x 160 positives, 8 x 90 negatives (42.9%), 20% heldout, seeded, byte-identical
+- [x] freeze is deliberate: `tools/freeze.py` -> committed `eval/frozen.json`; generators never write it
+- **verified (G1):** carriers 23/23, world planted 73, one location 1767/1767, negatives 8/8 keyed clean
+- decision: reserved SSN = area 000/666, group 00, serial 0000, or 987-65-4320..4329. Area 9xx is
+  the ITIN space and stays an identifier.
+- known: pptx is minimal (no slide master), JPEG not decoded by a real decoder (no PIL)
+
+### M4 design decisions (recorded before building)
+- vault (`phi_scan/vault.py`, done + tests): per-scan 32-byte key in `~/.phi-evidence/keys`
+  (override `PHI_EVIDENCE_KEYS`), HMAC-SHA256 addresses, AES-256-GCM, access.log, 30-day TTL,
+  `destroy()` shreds the key. `vault.token(value)` replaces plain SHA-256 value hashes.
+- per-scan keys make the index differ between runs by design: `check_collect` must pass one key
+  to both runs. G2's byte-identical requirement applies to the **canonical JSON**, which therefore
+  carries no salted tokens, no vault addresses and no timestamps; those go in a run manifest.
+- browser capture: Playwright with account A's cookie; out-of-scope requests intercepted, recorded
+  as evidence and aborted (never sent); every request delayed to keep >=1 s gaps; screenshots taken
+  with all text blurred (redacted at capture).
 
 ### M4 — P2 collection and evidence chain (G2)
 - [ ] Playwright collector: HAR + bodies + route interception, isolated profile
