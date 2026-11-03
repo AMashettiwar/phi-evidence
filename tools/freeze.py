@@ -22,7 +22,9 @@ KEYS = ROOT / "eval" / "keys"
 
 
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Over LF line endings: git may check a text file out with CRLF on Windows
+    and LF elsewhere, and the freeze must not depend on that."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def main() -> int:

@@ -28,7 +28,8 @@ KEYS = ROOT / "eval" / "keys"
 
 
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Same rule as tools/freeze.py: hashed over LF line endings.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def main() -> int:
