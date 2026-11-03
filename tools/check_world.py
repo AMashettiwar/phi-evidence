@@ -109,10 +109,12 @@ def main() -> int:
     id_keys, rule_ids, levels = load_policy()
 
     # --- freeze check ------------------------------------------------------
-    frozen_path = KEYS / "FROZEN.json"
+    # The frozen hash is committed, not regenerated: a key that is rewritten on
+    # every build always matches itself and proves nothing.
+    frozen_path = KEYS.parent / "frozen.json"
     if key_path == KEYS / "world_key.json":
         if not frozen_path.exists():
-            errors.append("FROZEN.json missing - the key was never frozen")
+            errors.append("eval/frozen.json missing - the key was never frozen")
         else:
             frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
             actual = hashlib.sha256(key_text.encode("utf-8")).hexdigest()

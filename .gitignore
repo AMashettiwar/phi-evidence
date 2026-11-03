@@ -15,11 +15,12 @@ fixtures/world/
 fixtures/injection/
 fixtures/context/
 fixtures/evasion/
+fixtures/corpus/
 fixtures/out/
 
 # scan output: contains hashes and offsets, and must never hold real PHI
 artifacts/
-eval/
+eval/keys/
 
 # captures of real traffic, which may contain patient data
 *.har

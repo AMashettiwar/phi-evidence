@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GATES = [
     ["-m", "pytest", "-q", "tests"],
     ["fixtures/build_world.py"],
+    ["fixtures/build_corpus.py"],
     ["tools/check_world.py"],
+    ["tools/gate_g1.py"],
     ["tools/check_collect.py"],
     ["tools/check_detect.py"],
     ["fixtures/build_injection.py"],

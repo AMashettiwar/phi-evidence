@@ -12,6 +12,13 @@ prove what actually left the site rather than guessing from the page source.
 This server only answers GET and HEAD. There is no code path that changes the
 world, which is what makes "read-only" testable instead of aspirational.
 
+Two provisioned accounts from fixtures/scope.yaml log in by session cookie.
+/portal and /api/v2/patients need one, except /portal/print/, which was left
+public by mistake: the path looks private, only a logged-out request shows it
+is not. /api/v2/patients/{id} returns any patient to any account: an IDOR.
+Extra headers and redirects come from the site's Netlify-style _headers and
+_redirects files, which are applied but never served.
+
 Run:  python fixtures/serve.py
 """
 
@@ -23,13 +30,21 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlparse
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORLD = ROOT / "fixtures" / "world"
 OUT = ROOT / "fixtures" / "out"
 SITE_PORT = 8801
 TRACKER_PORT = 8802
+SCOPE = yaml.safe_load((ROOT / "fixtures" / "scope.yaml").read_text(encoding="utf-8"))
+# session id -> the patient id that account belongs to
+SESSIONS = {account["cookie"].split("=", 1)[1]: account["patient_id"]
+            for account in SCOPE["accounts"]}
+NOT_SERVED = {"_headers", "_redirects"}
 
 GIF = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 
@@ -45,6 +60,10 @@ CONTENT_TYPES = {
     ".xml": "application/xml; charset=utf-8",
     ".env": "text/plain; charset=utf-8",
     ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".jpg": "image/jpeg",
 }
 
 _write_lock = threading.Lock()
@@ -56,10 +75,55 @@ def append(path: Path, record: dict) -> None:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def resolve(path: str) -> Path | None:
+def needs_login(path: str) -> bool:
+    if path.startswith("/portal/print/"):
+        return False
+    return path in ("/portal", "/portal/") or path.startswith(("/portal/", "/api/v2/patients"))
+
+
+def session_patient(cookie_header: str | None) -> str | None:
+    cookie = SimpleCookie(cookie_header or "")
+    return SESSIONS.get(cookie["sid"].value) if "sid" in cookie else None
+
+
+def site_rules(name: str) -> list[list[str]]:
+    """Lines of a _headers or _redirects file, split on whitespace."""
+    path = WORLD / "site" / name
+    if not path.exists():
+        return []
+    return [line.split() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def extra_headers(path: str) -> list[tuple[str, str]]:
+    """Netlify _headers: a path line, then indented "Name: value" lines."""
+    headers, applies = [], False
+    file = WORLD / "site" / "_headers"
+    lines = file.read_text(encoding="utf-8").splitlines() if file.exists() else []
+    for line in lines:
+        if not line.strip():
+            continue
+        if not line.startswith(" "):
+            pattern = line.strip()
+            applies = path == pattern or (pattern.endswith("*") and path.startswith(pattern[:-1]))
+        elif applies:
+            name, value = line.strip().split(":", 1)
+            headers.append((name, value.strip()))
+    return headers
+
+
+def resolve(path: str, patient: str | None = None) -> Path | None:
     """Map a URL path onto a file in the world, refusing anything outside it."""
     if path in ("/", ""):
         return WORLD / "site" / "index.html"
+    if path.startswith("/api/v2/"):
+        tail = path[len("/api/v2/"):].strip("/")
+        if tail == "openapi.json":
+            return WORLD / "api" / "v2" / "openapi.json"
+        if tail.startswith("patients/"):
+            wanted = tail[len("patients/"):]
+            # The IDOR: any id is served to any logged-in account.
+            return WORLD / "api" / "v2" / "patients" / f"{patient if wanted == 'me' else wanted}.json"
+        return None
     if path.startswith("/api/"):
         tail = path[len("/api/"):].strip("/")
         name = {
@@ -72,11 +136,13 @@ def resolve(path: str) -> Path | None:
         return WORLD / "files" / path[len("/files/"):]
     if path.startswith("/logs/"):
         return WORLD / "logs" / path[len("/logs/"):]
-    if path.startswith("/portal"):
+    if path in ("/portal", "/portal/"):
         return WORLD / "site" / "portal.html"
 
     candidate = (WORLD / "site" / path.lstrip("/")).resolve()
     if not str(candidate).startswith(str((WORLD / "site").resolve())):
+        return None
+    if candidate.name in NOT_SERVED:
         return None
     if candidate.is_dir():
         candidate = candidate / "index.html"
@@ -112,17 +178,32 @@ class SiteHandler(BaseHTTPRequestHandler):
             "user_agent": self.headers.get("User-Agent"),
         })
 
-        target = resolve(parsed.path)
+        patient = session_patient(self.headers.get("Cookie"))
+        if needs_login(parsed.path) and patient is None:
+            self.send_reply(401, b'{"error": "No auth token"}\n', ".json", body)
+            return
+
+        for rule in site_rules("_redirects"):
+            if rule[0] == parsed.path:
+                self.send_response(int(rule[2]))
+                self.send_header("Location", rule[1])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+        target = resolve(parsed.path, patient)
         if target is None or not target.exists() or not target.is_file():
             self.send_error(404, "Not found")
             return
+        self.send_reply(200, target.read_bytes(), target.suffix, body, extra_headers(parsed.path))
 
-        payload = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", CONTENT_TYPES.get(target.suffix, "application/octet-stream"))
+    def send_reply(self, status: int, payload: bytes, suffix: str, body: bool,
+                   headers: list[tuple[str, str]] = ()) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", CONTENT_TYPES.get(suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(payload)))
-        if parsed.path.startswith("/portal"):
-            self.send_header("Set-Cookie", "sid=demo; Path=/")
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
         if body:
             self.wfile.write(payload)

@@ -10,7 +10,8 @@ checker relies on that. The same person can appear in two different files; that
 is deliberate, because cross-file linking has to be tested later.
 
 All personal values sit in ranges set aside for testing:
-  - SSNs use the 987-65-43xx block, reserved for advertising and samples
+  - SSNs use 987-65-4330 to 4399: the ITIN-shaped space, still an identifier.
+    987-65-4320 to 4329 is the advertising block and is a negative on purpose
   - phone numbers use the 555 exchange, which has no real subscribers
   - the site's domain ends in .example, reserved by RFC 2606
 
@@ -23,6 +24,8 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
+
+from docgen import build_docx, build_jpeg, build_pdf, build_pptx, build_xlsx
 
 ROOT = Path(__file__).resolve().parents[1]
 WORLD = ROOT / "fixtures" / "world"
@@ -77,7 +80,7 @@ def person(i: int) -> dict:
         "name": f"{first} {last}",
         "mrn": f"MRN-{880000 + i * 137}",
         "dob": f"19{52 + i % 38}-{(i % 12) + 1:02d}-{(i % 27) + 1:02d}",
-        "ssn": f"987-65-43{20 + i % 80:02d}",
+        "ssn": f"987-65-43{30 + i % 70:02d}",
         "phone": f"(617) 555-{2000 + i}",
         "email": f"{first.lower()}.{last.lower().replace(chr(39), '')}@northbridge.example",
         "dx": dx,
@@ -160,47 +163,6 @@ def build_dicom(patient_name: str, patient_id: str, dob: str, study_date: str,
     dataset += _dicom_element(0x0010, 0x0040, "CS", "F")
     dataset += _dicom_element(0x0020, 0x000D, "UI", "1.2.826.0.1.3680043.8.498.3")
     return b"\x00" * 128 + b"DICM" + group_length + meta + dataset
-
-
-def build_pdf(lines: list[str], info: dict[str, str]) -> bytes:
-    """A small but valid PDF with an uncompressed text layer and /Info metadata."""
-    objects: list[bytes] = []
-
-    def add(body: bytes) -> None:
-        objects.append(body)
-
-    content = ["BT", "/F1 11 Tf", "72 700 Td"]
-    for index, line in enumerate(lines):
-        escaped = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
-        if index:
-            content.append("0 -20 Td")
-        content.append(f"({escaped}) Tj")
-    content.append("ET")
-    stream = "\n".join(content).encode("latin-1")
-
-    add(b"<< /Type /Catalog /Pages 2 0 R >>")
-    add(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    add(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
-    add(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream")
-    add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-    info_body = "<< " + " ".join(f"/{k} ({v})" for k, v in info.items()) + " >>"
-    add(info_body.encode("latin-1"))
-
-    out = bytearray(b"%PDF-1.4\n")
-    offsets: list[int] = []
-    for number, body in enumerate(objects, start=1):
-        offsets.append(len(out))
-        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
-    xref_at = len(out)
-    size = len(objects) + 1
-    out += f"xref\n0 {size}\n".encode()
-    out += b"0000000000 65535 f \n"
-    for offset in offsets:
-        out += f"{offset:010d} 00000 n \n".encode()
-    out += (f"trailer\n<< /Size {size} /Root 1 0 R /Info {len(objects)} 0 R >>\n"
-            f"startxref\n{xref_at}\n%%EOF\n").encode()
-    return bytes(out)
 
 
 def main() -> int:
@@ -638,6 +600,169 @@ Disallow: /portal/patient?mrn={p[14]['mrn']}
           "critical", ["names", "mrn", "dates"], ["permitted_disclosure"],
           "A DICOM study header carrying the patient's name, record number, date of birth and the diagnosis. The image itself is untouched; the leak is the metadata.")
 
+    # ------------------------------------------------- live-site carriers
+    # Everything below is served by fixtures/serve.py with two provisioned test
+    # accounts. Headers and redirects live in Netlify-style _headers and
+    # _redirects files, so each planted header still has one byte offset.
+    account_a, account_b = p[30], p[31]
+    for who in (account_a, account_b):
+        write(f"api/v2/patients/{who['i']}.json", json.dumps({
+            "resourceType": "Patient", "id": str(who["i"]),
+            "name": [{"text": who["name"]}],
+            "identifier": [{"system": "urn:northbridge:mrn", "value": who["mrn"]}],
+            "birthDate": who["dob"],
+            "condition": who["dx"],
+        }, indent=2) + "\n")
+    clean(f"api/v2/patients/{account_a['i']}.json", "api_response", "own_record", account_a["name"],
+          "Account A's own record, read while logged in as account A. Own data is not a finding.")
+    claim(f"api/v2/patients/{account_b['i']}.json", "api_response", "idor_record", account_b["name"],
+          "high", ["names", "mrn", "dates"], ["permitted_disclosure", "access_control_audit"],
+          "Account B's record, readable by account A by changing the id in the URL: an IDOR.")
+
+    write("api/v2/openapi.json", json.dumps({
+        "openapi": "3.0.3", "info": {"title": "Northbridge patient API", "version": "2"},
+        "paths": {
+            "/api/v2/patients/me": {"get": {"summary": "The logged-in patient's record"}},
+            "/api/v2/patients/{id}": {"get": {"summary": "A patient record by id",
+                                               "parameters": [{"name": "id", "in": "path",
+                                                               "required": True}]}},
+        },
+    }, indent=2) + "\n")
+    write("site/portal/visit.html", """<!doctype html><html><head><title>Your visit</title></head>
+<body><h1>Your visit</h1><p>Your check-in is complete.</p></body></html>""")
+
+    cookie_patient, redirect_patient, public_print = p[32], p[33], p[34]
+    write("site/_headers", f"""/portal/visit
+  Set-Cookie: last_patient={cookie_patient['mrn']}; Path=/
+/portal/print/*
+  Cache-Control: public, max-age=86400
+""")
+    claim("site/_headers", "response_header", "set_cookie", cookie_patient["mrn"],
+          "high", ["mrn"], ["permitted_disclosure"],
+          "A record number set as a cookie on every visit page. It travels in every request.")
+    write("site/_redirects",
+          f"/portal/lookup  /portal/print/visit-summary?mrn={redirect_patient['mrn']}"
+          f"&dx={redirect_patient['code']}  302\n")
+    claim("site/_redirects", "response_header", "location", redirect_patient["mrn"],
+          "high", ["mrn"], ["permitted_disclosure"],
+          "A redirect whose Location carries a record number and a diagnosis code.")
+    write("site/portal/print/visit-summary.html", f"""<!doctype html><html><head><title>Visit summary</title></head>
+<body><h1>Visit summary</h1>
+<p>{public_print['name']} was seen for {public_print['dx']}.</p></body></html>""")
+    claim("site/portal/print/visit-summary.html", "page_text", "print_summary", public_print["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "Under /portal but served without a login. The path suggests private; the logged-out re-fetch proves public.")
+
+    aria, ld, idb, cookie_js = p[35], p[36], p[37], p[18]
+    write("site/updates.html", f"""<!doctype html><html><head><title>Clinic updates</title></head>
+<body><h1>Clinic updates</h1><p>New parking opens in March.</p>
+<span aria-hidden="true">{aria['name']} - {aria['dx']}</span></body></html>""")
+    claim("site/updates.html", "aria_hidden", "screen_reader_hidden", aria["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "Text hidden from screen readers but present in the page for anyone who views source.")
+    write("site/events.html", f"""<!doctype html><html><head><title>Community events</title>
+<script type="application/ld+json">{json.dumps({
+        "@context": "https://schema.org", "@type": "Patient", "name": ld["name"],
+        "healthCondition": {"@type": "MedicalCondition", "name": ld["dx"]}})}</script>
+</head><body><h1>Community events</h1><p>Health fair on Saturday.</p></body></html>""")
+    claim("site/events.html", "json_ld", "structured_data", ld["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "Structured data for search engines describing a patient and their condition.")
+    write("site/portal-cache.html", f"""<!doctype html><html><head><title>Loading</title></head>
+<body><script>
+const open = indexedDB.open("visits", 1);
+open.onsuccess = () => open.result.transaction("visits", "readwrite")
+  .objectStore("visits").put({{mrn: "{idb['mrn']}", dx: "{idb['code']}"}});
+</script></body></html>""")
+    claim("site/portal-cache.html", "indexeddb", "visit_cache", idb["mrn"],
+          "high", ["mrn"], ["permitted_disclosure"],
+          "A record number and diagnosis code written into the browser's IndexedDB.")
+    write("site/checkin.html", f"""<!doctype html><html><head><title>Check in</title></head>
+<body><h1>Check in</h1><script>
+document.cookie = "checkin=" + encodeURIComponent("{cookie_js['name']}|{cookie_js['code']}") + "; path=/";
+</script></body></html>""")
+    claim("site/checkin.html", "cookie", "checkin_cookie", cookie_js["name"],
+          "high", ["names"], ["permitted_disclosure"],
+          "A script-set cookie holding a name and a diagnosis code.")
+
+    # ------------------------------------------------- document carriers
+    # The places a word processor or camera hides text. Four new people, because
+    # person(i) repeats names past 40. Containers are stored uncompressed, so
+    # each planted value still has one byte offset in the file.
+    extra = []
+    for i, name in zip(range(40, 44), ("Thandiwe Okonkwo", "Lars Eriksen",
+                                        "Mei-Ling Zhao", "Gustavo Pereira")):
+        who = person(i)
+        who["name"] = name
+        tags_by_value[name] = who["tags"]
+        extra.append(who)
+    roster, tracked, meta, notes, photo = p[19], *extra
+    (WORLD / "files").mkdir(parents=True, exist_ok=True)
+    (WORLD / "files" / "intake-roster.xlsx").write_bytes(build_xlsx([
+        {"name": "Schedule", "rows": [["Clinic", "Room"], ["Oncology", "3"]], "hidden": False},
+        {"name": "Roster", "rows": [["Name", "Condition"], [roster["name"], roster["dx"]]],
+         "hidden": True}]))
+    claim("files/intake-roster.xlsx", "hidden_sheet", "roster_row", roster["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "A hidden worksheet. Excel does not show it; anyone who unhides it, or reads the file, does.")
+    (WORLD / "files" / "case-review.docx").write_bytes(build_docx(
+        ["Case review for the tumour board.", "Discussion notes follow."],
+        deleted=[f"{tracked['name']} - {tracked['dx']}"]))
+    claim("files/case-review.docx", "tracked_changes", "deleted_text", tracked["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "Deleted with track changes on. The deletion is still in the file.")
+    (WORLD / "files" / "discharge-template.docx").write_bytes(build_docx(
+        ["Discharge instructions template."], core={"creator": meta["name"], "subject": meta["dx"]}))
+    claim("files/discharge-template.docx", "file_metadata", "core_properties", meta["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "A blank template whose document properties still name the patient it was made from.")
+    (WORLD / "files" / "grand-rounds.pptx").write_bytes(build_pptx([
+        {"text": "Grand rounds: interesting cases", "notes": f"{notes['name']}, {notes['dx']}"}]))
+    claim("files/grand-rounds.pptx", "speaker_notes", "presenter_notes", notes["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "Speaker notes are not on the slide, but they are in the file that was published.")
+    (WORLD / "files" / "wound-photo.jpg").write_bytes(build_jpeg(
+        {"ImageDescription": f"{photo['name']} - {photo['dx']}", "Software": "ClinicCam 2.1"}))
+    claim("files/wound-photo.jpg", "exif", "image_description", photo["name"],
+          "critical", ["names"], ["permitted_disclosure"],
+          "A clinical photo whose EXIF caption names the patient and the condition.")
+    write("site/resources.html", """<!doctype html><html><head><title>Resources</title></head>
+<body><h1>Resources</h1><ul>
+<li><a href="/files/intake-roster.xlsx">Clinic schedule</a></li>
+<li><a href="/files/case-review.docx">Tumour board template</a></li>
+<li><a href="/files/discharge-template.docx">Discharge template</a></li>
+<li><a href="/files/grand-rounds.pptx">Grand rounds slides</a></li>
+<li><a href="/files/wound-photo.jpg">Photo guidance</a></li>
+</ul></body></html>""")
+
+    # ------------------------------------------------- negative predicates
+    # policy/negatives.yaml names a fixture for each; these are the four the
+    # original world did not already have.
+    write("site/reports/annual-outcomes.html", """<!doctype html><html><head><title>Annual outcomes</title></head>
+<body><h1>2025 outcomes</h1>
+<p>We treated 1,214 patients for type 2 diabetes; 87% reached their HbA1c target.</p>
+<p>312 patients completed cardiac rehabilitation.</p></body></html>""")
+    clean("site/reports/annual-outcomes.html", "page_text", "group_count", "1,214 patients",
+          "Counts about groups of 11 or more. No person is described.")
+    write("site/forms/sample-intake.html", """<!doctype html><html><head><title>Sample intake form</title></head>
+<body><h1>SAMPLE - intake form</h1>
+<p>SSN: 000-12-3456 &middot; Phone: (617) 555-0123 &middot; Email: sample.patient@example.com</p></body></html>""")
+    clean("site/forms/sample-intake.html", "page_text", "sample_values", "000-12-3456",
+          "Reserved values only: SSN area 000, phone 555-0123, an example.com address.")
+    write("site/billing/codes.html", """<!doctype html><html><head><title>Billing codes</title></head>
+<body><h1>Common codes</h1><table>
+<tr><td>E11.9</td><td>Type 2 diabetes mellitus without complications</td></tr>
+<tr><td>Z34.90</td><td>Encounter for supervision of normal pregnancy</td></tr>
+</table></body></html>""")
+    clean("site/billing/codes.html", "page_text", "code_table", "E11.9",
+          "A code reference table. No person is attached to any code.")
+    write("site/stories/with-consent.html", """<!doctype html><html><head><title>Patient stories</title></head>
+<body><h1>Stories</h1>
+<p>Rosalind Achterberg talks about life after her kidney transplant.
+<em>Shared with Rosalind's written permission.</em></p></body></html>""")
+    clean("site/stories/with-consent.html", "page_text", "consented_story", "Rosalind Achterberg",
+          "A testimonial with a visible consent marker in the same record.")
+
     # ---------------------------------------------------------------- key
     items: list[dict] = []
     for index, entry in enumerate(claims, start=1):
@@ -672,10 +797,6 @@ Disallow: /portal/patient?mrn={p[14]['mrn']}
     key_path = KEYS / "world_key.json"
     key_path.write_text(key_text, encoding="utf-8")
     digest = hashlib.sha256(key_text.encode("utf-8")).hexdigest()
-    (KEYS / "FROZEN.json").write_text(json.dumps({
-        "world_key_sha256": digest,
-        "note": "Frozen before the first scanner run. Any change to the key invalidates every score.",
-    }, indent=2) + "\n", encoding="utf-8")
 
     print(f"built world at {WORLD}")
     print(f"  flagged items : {len(flagged)}")
