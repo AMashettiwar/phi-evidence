@@ -78,8 +78,11 @@ def main() -> int:
         decided = llm["p"] < ACCEPTANCE["mcnemar_alpha"]
         rows.append(("rules vs rules+llm", f"b={llm['only_first_right']} c={llm['only_second_right']} "
                      f"p={llm['p']:.4f} delta={llm['delta_correct']}"
-                     + ("" if decided else f"; UNDECIDED, needs ~{llm['pairs_needed_to_decide']} "
-                                           "discordant items"), decided and llm["delta_correct"] > 0))
+                     + ("" if decided else
+                        f"; UNDECIDED, needs ~{llm['pairs_needed_to_decide']} discordant items"
+                        if llm["pairs_needed_to_decide"] else
+                        "; no difference between the arms: more items would not decide one"),
+                     decided and llm["delta_correct"] > 0))
     g4_path = ROOT / "artifacts" / "g4_gate" / "g4.json"
     g4 = json.loads(g4_path.read_text(encoding="utf-8")) if g4_path.exists() else {}
     real = g4.get("provider") == "groq"

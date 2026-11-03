@@ -84,3 +84,13 @@ CONSENT_LAYOUTS = {
 }
 TWO_STORIES = (f"<p>{CONSENT_STORY}</p><p>Shared with permission.</p>"
                "<p>Ana Ruiz manages asthma with an inhaler.</p><p>Thanks for reading.</p>")
+
+# Multi-block records with the note beside them (written after G5 run 5).
+MULTI_BLOCK_CONSENT = {
+    "article_after_note": f"<article><h2>Priya Nair</h2><p>{CONSENT_STORY}</p></article><p>Shared with permission.</p>",
+    "card_after_note": f"<div class='card'><h3>Priya Nair</h3><p>{CONSENT_STORY}</p></div><small>Names changed</small>",
+    "list_item_after": f"<ul><li><strong>Priya Nair</strong><p>{CONSENT_STORY}</p></li></ul><p>Shared with written permission.</p>",
+    "figure_after": f"<figure><img alt='Priya Nair' src='p.jpg'><figcaption>{CONSENT_STORY}</figcaption></figure><p>Fictional account.</p>",
+    "card_wrapped_note": f"<div class='story'><div class='card'><h3>Priya Nair</h3><p>{CONSENT_STORY}</p></div><p>Shared with permission</p></div>",
+}
+CARD_WITHOUT_NOTE = f"<div class='card'><h3>Priya Nair</h3><p>{CONSENT_STORY}</p></div><small>Updated May 2026</small>"

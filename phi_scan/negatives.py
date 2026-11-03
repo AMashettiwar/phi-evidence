@@ -61,6 +61,7 @@ ORG_SCHEMA = re.compile(
     r'"@type"\s*:\s*"(?:Organization|MedicalOrganization|Hospital|MedicalClinic|LocalBusiness|'
     r'Pharmacy|DiagnosticLab|MedicalBusiness|NGO|Corporation)"')
 TAG = re.compile(r"<[^>]+>")
+IMG_ALT = re.compile(r"""<img\b[^>]*\balt\s*=\s*["']([^"']*)["'][^>]*>""", re.I)
 WHITESPACE = re.compile(r"\s+")
 RESERVED_DOMAINS = (".example", ".test", ".invalid", ".localhost",
                     "example.com", "example.net", "example.org")
@@ -184,7 +185,16 @@ def own_record(record: Record) -> str | None:
 
 
 def _plain(markup: str) -> str:
+    # Image alt text is part of the record, as it is in the rendered text.
+    markup = IMG_ALT.sub(lambda m: f" {m.group(1)} ", markup)
     return WHITESPACE.sub(" ", html.unescape(TAG.sub(" ", markup))).strip()
+
+
+def _needle(record: Record) -> str:
+    """The record's text as page blocks spell it. The renderer joins a record's
+    blocks with " | " ("Priya Nair | her story"); the page has no pipes, so a
+    multi-block record never found its own element or the note beside it."""
+    return WHITESPACE.sub(" ", record.text.replace("|", " ")).strip()
 
 
 def containing_blocks(record: Record) -> list[tuple[str, str, str]]:
@@ -196,7 +206,7 @@ def containing_blocks(record: Record) -> list[tuple[str, str, str]]:
     note is the short text right after the element closes, before the next
     block starts: a "<small>Fictional account</small>" under a figure is the
     figure's caption in all but markup."""
-    needle = WHITESPACE.sub(" ", record.text).strip()
+    needle = _needle(record)
     found = []
     if not needle:
         return found
@@ -234,13 +244,15 @@ def consented_testimonial(record: Record) -> str | None:
 def adjacent_notes(record: Record) -> list[str]:
     """The short blocks immediately before and after the record's innermost
     record element: where a page puts a one-line note about one story."""
-    needle = WHITESPACE.sub(" ", record.text).strip()
+    needle = _needle(record)
+    # The innermost element holding the whole record, whatever its tag: a card
+    # is a <div>, and the note sits beside the card.
     best = None
     for opening in BLOCK_OPEN.finditer(record.page):
         tag = opening.group(1).lower()
         closing = re.compile(rf"</{tag}\s*>", re.I).search(record.page, opening.end())
-        if tag in RECORD_TAGS and closing and needle and \
-                needle in _plain(record.page[opening.end():closing.start()]):
+        if closing and needle and needle in _plain(record.page[opening.end():closing.start()]) \
+                and (best is None or closing.end() - opening.start() < best[1] - best[0]):
             best = (opening.start(), closing.end())
     if best is None:
         return []
@@ -259,6 +271,11 @@ def adjacent_notes(record: Record) -> list[str]:
                 len(_plain(record.page[prior.end():prior_end.start()])) >= 20
         if end and end.end() <= best[0] and not story_before_note:
             notes.append(_plain(record.page[before[-1].end():end.start()]))
+    # Inline text right after the element ("</div><small>Names changed</small>"),
+    # then the next block.
+    following = record.page[best[1]:best[1] + 400]
+    next_block = BLOCK_OPEN.search(following)
+    notes.append(_plain(following[:next_block.start()] if next_block else following))
     after = BLOCK_OPEN.search(record.page, best[1])
     if after:
         tag = after.group(1).lower()

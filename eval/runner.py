@@ -90,9 +90,11 @@ def compare(first: list[dict], second: list[dict]) -> dict:
     b = sum(correct(x) and not correct(y) for x, y in zip(first, second))
     c = sum(correct(y) and not correct(x) for x, y in zip(first, second))
     p = mcnemar_exact(b, c)
+    # With b == c the arms do not differ at all: no larger n would decide a
+    # difference that is not there, so none is proposed.
+    needed = mcnemar_n_needed(b or 0.5, c or 0.5) if p >= 0.05 and b != c else None
     return {"only_first_right": b, "only_second_right": c, "p": p,
-            "delta_correct": c - b,
-            "pairs_needed_to_decide": mcnemar_n_needed(b or 0.5, c or 0.5) if p >= 0.05 else None}
+            "delta_correct": c - b, "pairs_needed_to_decide": needed}
 
 
 def evaluate(corpus: Path, key_items: list[dict], out: Path, provider=None) -> dict:
