@@ -795,7 +795,9 @@ document.cookie = "checkin=" + encodeURIComponent("{cookie_js['name']}|{cookie_j
     }
     key_text = json.dumps(key, indent=2, sort_keys=True) + "\n"
     key_path = KEYS / "world_key.json"
-    key_path.write_text(key_text, encoding="utf-8")
+    # newline="\n": the frozen hash is over the file's bytes, which must not
+    # depend on the operating system that built it.
+    key_path.write_text(key_text, encoding="utf-8", newline="\n")
     digest = hashlib.sha256(key_text.encode("utf-8")).hexdigest()
 
     print(f"built world at {WORLD}")

@@ -744,7 +744,8 @@ def build(out_root: Path, key_path: Path) -> dict:
     key = {"version": 1, "generator": "fixtures/build_corpus.py", "seed": SEED,
            "context": "public-web", "counts": counts, "items": _items}
     key_path.parent.mkdir(parents=True, exist_ok=True)
-    key_path.write_text(json.dumps(key, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    key_path.write_text(json.dumps(key, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+                        newline="\n")
     return key
 
 
