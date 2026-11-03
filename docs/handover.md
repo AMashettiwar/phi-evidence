@@ -14,11 +14,12 @@ Run all: `python tools/run_gates.py` (the single ordered list; CI calls it). Bri
 |---|---|---|
 | G0 policy spec | `python tools/gate_g0.py` (also `python tools/lint_policy.py`) | Machine checks built. Rulebook sign-off pending a human. |
 | G1 fixtures and key | `python tools/gate_g1.py` | Done, frozen. Carriers 23/23, 73 planted leaks, one location each. |
-| G2 collection and evidence | `python tools/gate_g2.py` (with `tools/check_collect.py`) | Done: canonical output identical, tracker received 0, min server gap 1.014 s, 0 planted values in artifacts, 62/62 replay. |
-| G3 detection | `python tools/gate_g3.py` (with `tools/check_detect.py`) | In progress. World 73/73 caught, 0 false alarms, 50/50 always-flag at last note; corpus recall below target when last recorded. |
-| G4 adjudication | `python tools/gate_g4.py` (with `tools/check_ai.py`) | Gate exists. Kappa over k=3 needs the real model and key. |
+| G2 collection and evidence | `python tools/gate_g2.py` (with `tools/check_collect.py`) | Passes: two live runs give byte-identical canonical findings, the tracker received 0 requests, 0 writes reached the site (1 page POST blocked), min server-side gap 1.015 s, 0 planted values in either artifact tree, 61/61 findings replay in both runs. |
+| G3 detection | `python tools/gate_g3.py` (with `tools/check_detect.py`) | Passes. World 73/73 caught, 0 false alarms, 50/50 always-flag; the same record found in 23/23 carriers; hard negatives 4/4 clean. Independent probes (`tests/test_probes.py`) 30/30 prose, 7/7 layouts, 0/10 negatives flagged. |
+| G4 adjudication | `python tools/gate_g4.py` (with `tools/check_ai.py`) | Passes on Groq `openai/gpt-oss-120b`: 0 injection escapes over 25 pages (all 25 logged), 0 of 2,000 adversarial reviews pushed an always-flag finding below High, Fleiss kappa 0.820 over k=3 (40 findings; 18 distinct model fingerprints, so determinism is best effort), 145 calls for $0.025, p95 1.34 s. |
 | G5 evaluation | `python tools/gate_g5.py` | Gate exists. Undecidable thresholds must fail loudly. Blind review pending humans. |
-| G6 report and fresh clone | Not yet a command in `run_gates.py`. Planned: 0 unmasked values in rendered HTML, schema validates, fresh clone reproduces G5. | Milestone M8, not complete. |
+| G6 end to end | `python tools/gate_g6.py` runs `python -m phi_scan.cli scan --scope fixtures/scope.yaml` against the served site | Passes: 0 unmasked planted values in report.html, SARIF, findings, run, capture, evidence and index; schema valid; every finding replays; measured levels right (IDOR record High, page public by mistake Critical, own record not reported). |
+| M9 fresh clone | `python tools/fresh_clone.py` | Clones HEAD, builds a venv from `requirements.lock` only, runs every gate, compares the acceptance table with the committed `eval/results.json`. |
 
 Other gates in the list: `pytest -q tests`, `check_world`, `check_crawl`, `check_scale`, `check_evasion`, `check_context`, `check_emit`, `check_no_exam_content`, and the fixture builders. `TESTING.md` says what each proves. I have not run them for this document.
 

@@ -65,3 +65,22 @@ LAYOUTS = {
     "figure_alt": "<figure><img alt='Rowan Ellis' src='x.jpg'><figcaption>chronic kidney disease support group</figcaption></figure>",
     "article": "<article><h1>Rowan Ellis</h1><p>Diagnosed with chronic kidney disease in 2019.</p></article>",
 }
+
+# Consented testimonials laid out in different ways (written after G5 run 4,
+# without opening a held-out item). Each must stay clean; the last control
+# has a note between two stories, which belongs only to the story before it.
+CONSENT_STORY = "Priya Nair shares how she manages type 2 diabetes every day."
+CONSENT_LAYOUTS = {
+    "p_em": f"<p>{CONSENT_STORY} <em>Shared with written permission.</em></p>",
+    "p_then_small": f"<p>{CONSENT_STORY}</p><small>Names and details changed.</small>",
+    "div_p_small": f"<div class='story'><p>{CONSENT_STORY}</p><small>Shared with permission</small></div>",
+    "blockquote_footer": f"<blockquote><p>{CONSENT_STORY}</p><footer>Published with consent</footer></blockquote>",
+    "blockquote_then_p": f"<blockquote><p>{CONSENT_STORY}</p></blockquote><p>Shared with permission.</p>",
+    "nested_list_item": f"<ul><li><p>{CONSENT_STORY}</p><span>Shared with permission</span></li></ul>",
+    "figure_after": "<figure><figcaption>Priya Nair, living with type 2 diabetes</figcaption></figure><small>Fictional account</small>",
+    "table_row": "<table><tr><td>Priya Nair</td><td>type 2 diabetes</td><td>Shared with permission</td></tr></table>",
+    "definition_list": f"<dl><dt>Story</dt><dd>{CONSENT_STORY}</dd><dt>Consent</dt><dd>Shared with written permission</dd></dl>",
+    "note_before": f"<p><strong>Shared with permission</strong></p><p>{CONSENT_STORY}</p>",
+}
+TWO_STORIES = (f"<p>{CONSENT_STORY}</p><p>Shared with permission.</p>"
+               "<p>Ana Ruiz manages asthma with an inhaler.</p><p>Thanks for reading.</p>")

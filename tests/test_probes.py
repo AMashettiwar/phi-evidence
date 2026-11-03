@@ -50,3 +50,24 @@ def test_one_record_across_several_elements(tmp_path, monkeypatch):
               if not any(vault.token(LAYOUT_NAME) in f["value_hashes"]
                          for f in findings if f["path"] == f"{name}.html")]
     assert missed == []
+
+
+def test_consented_testimonial_layouts(tmp_path, monkeypatch):
+    from probes_prose import CONSENT_LAYOUTS, TWO_STORIES
+
+    monkeypatch.setenv("PHI_EVIDENCE_KEYS", str(tmp_path / "keys"))
+    src = tmp_path / "src"
+    src.mkdir()
+    pages = dict(CONSENT_LAYOUTS, two_stories=TWO_STORIES)
+    for name, body in pages.items():
+        (src / f"{name}.html").write_text(f"<html><body><h1>Stories</h1>{body}</body></html>",
+                                          encoding="utf-8")
+    collect(src, tmp_path / "run")
+    findings = [f for f in detect(tmp_path / "run" / "index.jsonl", tmp_path / "run" / "vault", (),
+                                  context="public-web") if f["level"] != "review"]
+    vault = Vault(tmp_path / "run" / "vault")
+    flagged = [name for name in CONSENT_LAYOUTS if any(f["path"] == f"{name}.html" for f in findings)]
+    two = [f for f in findings if f["path"] == "two_stories.html"]
+    assert flagged == []
+    assert any(vault.token("Ana Ruiz") in f["value_hashes"] for f in two)
+    assert not any(vault.token("Priya Nair") in f["value_hashes"] for f in two)

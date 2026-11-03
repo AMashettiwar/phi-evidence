@@ -48,11 +48,15 @@ CONSENT = re.compile(
 CONSENT_FIELD = re.compile(
     r'"consent(?:_given|ed|_status)?"\s*:\s*(?:true|"(?:yes|given|written|signed|granted|'
     r'obtained|on file)[^"]*")', re.I)
-BLOCK_OPEN = re.compile(r"<(p|li|blockquote|td|tr|dd|figcaption|figure|address|div|section|"
+BLOCK_OPEN = re.compile(r"<(p|li|blockquote|td|tr|dl|dd|figcaption|figure|address|div|section|"
                         r"article|footer)\b[^>]*>", re.I)
 # The elements that are one record: a consent note in a sibling cell of the same
-# row, or in the caption of the same figure, belongs to that record.
-RECORD_TAGS = {"p", "li", "blockquote", "td", "tr", "dd", "figcaption", "figure", "article"}
+# row, in the caption of the same figure, or in another field of the same
+# definition list, belongs to that record.
+RECORD_TAGS = {"p", "li", "blockquote", "td", "tr", "dl", "dd", "figcaption", "figure", "article"}
+# A block this short that is mostly a consent marker annotates the record next
+# to it, before or after ("<p><strong>Shared with permission</strong></p>").
+NOTE_MAX = 80
 ORG_SCHEMA = re.compile(
     r'"@type"\s*:\s*"(?:Organization|MedicalOrganization|Hospital|MedicalClinic|LocalBusiness|'
     r'Pharmacy|DiagnosticLab|MedicalBusiness|NGO|Corporation)"')
@@ -220,7 +224,48 @@ def consented_testimonial(record: Record) -> str | None:
         match = CONSENT.search(text) or CONSENT.search(note)
         if match:
             return f'a visible consent marker: "{match.group(0)}"'
+    for note in adjacent_notes(record):
+        match = CONSENT.search(note)
+        if match and len(match.group(0)) >= len(note) / 2:
+            return f'a consent note beside the record: "{match.group(0)}"'
     return None
+
+
+def adjacent_notes(record: Record) -> list[str]:
+    """The short blocks immediately before and after the record's innermost
+    record element: where a page puts a one-line note about one story."""
+    needle = WHITESPACE.sub(" ", record.text).strip()
+    best = None
+    for opening in BLOCK_OPEN.finditer(record.page):
+        tag = opening.group(1).lower()
+        closing = re.compile(rf"</{tag}\s*>", re.I).search(record.page, opening.end())
+        if tag in RECORD_TAGS and closing and needle and \
+                needle in _plain(record.page[opening.end():closing.start()]):
+            best = (opening.start(), closing.end())
+    if best is None:
+        return []
+    before = [m for m in BLOCK_OPEN.finditer(record.page, 0, best[0])]
+    notes = []
+    if before:
+        tag = before[-1].group(1).lower()
+        end = re.compile(rf"</{tag}\s*>", re.I).search(record.page, before[-1].end())
+        # A note between two stories belongs to the one before it, so a note
+        # counts for the record after it only when no story precedes the note.
+        story_before_note = False
+        if len(before) > 1:
+            prior = before[-2]
+            prior_end = re.compile(rf"</{prior.group(1)}\s*>", re.I).search(record.page, prior.end())
+            story_before_note = bool(prior_end) and prior.group(1).lower() in RECORD_TAGS and \
+                len(_plain(record.page[prior.end():prior_end.start()])) >= 20
+        if end and end.end() <= best[0] and not story_before_note:
+            notes.append(_plain(record.page[before[-1].end():end.start()]))
+    after = BLOCK_OPEN.search(record.page, best[1])
+    if after:
+        tag = after.group(1).lower()
+        end = re.compile(rf"</{tag}\s*>", re.I).search(record.page, after.end())
+        if end:
+            notes.append(_plain(record.page[after.end():end.start()]))
+    return [note for note in notes if 0 < len(note) <= NOTE_MAX]
 
 
 PREDICATES = {

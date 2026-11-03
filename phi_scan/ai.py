@@ -433,6 +433,11 @@ def review_all(findings: list[dict], vault, provider: Provider | None = None,
         runs = [provider.review(request) for _ in range(k)]
         reviewed = apply_review(finding, consensus(runs), provider.name)
         reviewed["ai"]["runs"] = [r.get("assessment", "invalid") for r in runs]
+        if "[ENCODED_PAYLOAD]" in request.redacted_context and reviewed["ai"].pop("proposes_review", False):
+            # The payload is removed before the request, so the model judged a
+            # placeholder. It called 16 base64-hidden leaks "synthetic" in G5;
+            # it may not clear evidence it never saw.
+            reviewed["ai"]["applied"] = "keep: the model could not see the encoded record"
         annotated.append(reviewed)
 
     # The suppression cap: in finding order, at most REVIEW_CAP of the scan's

@@ -155,6 +155,9 @@ NAME_STOP: set[str] = {
     "md", "dds", "dmd", "phd", "rn", "cpa", "esq", "np", "pa",
     "blvd", "boulevard", "avenue", "ave", "street", "road", "lane", "drive",
     "suite", "floor", "parkway", "highway", "apt", "unit",
+    # Anatomy in procedure names: "Chest X-ray" on a code list was a person.
+    "chest", "abdomen", "abdominal", "pelvis", "pelvic", "spine", "spinal", "knee",
+    "shoulder", "skull", "thorax", "x-ray", "xray",
     "institute", "institution", "foundation", "corporation",
     "scan", "scanned", "scanner", "imaging", "diagnostics",
     "pdf", "docx", "xlsx", "pptx", "csv", "json", "jsonl", "xml", "png",

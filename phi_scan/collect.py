@@ -161,9 +161,10 @@ INLINE = {"span", "b", "i", "em", "strong", "a", "small", "sup", "sub", "font", 
           "s", "abbr", "code", "label", "cite", "time", "q"}
 
 
-def _text(node, separator: str = " | ") -> str:
-    """Text of a subtree: inline elements join with nothing, <br> with a
-    space, block children with a separator, image alt text included."""
+def _raw_text(node) -> str:
+    """Text of a subtree, whitespace as written: inline elements join with
+    nothing, <br> with a space, block children with a " | " separator, image
+    alt text included. "Micheal </span><span>Choi" keeps its space."""
     if isinstance(node, str):
         return node
     if node.tag in SKIP:
@@ -174,11 +175,15 @@ def _text(node, separator: str = " | ") -> str:
         return f" {node.attrs.get('alt') or ''} "
     parts = []
     for child in node.children:
-        piece = _text(child, separator)
+        piece = _raw_text(child)
         block = not isinstance(child, str) and child.tag not in INLINE and child.tag not in ("br", "img")
-        parts.append(f"{separator}{piece}{separator}" if block and piece.strip() else piece)
-    joined = "".join(parts)
-    joined = re.sub(r"(\s*\|\s*)+", " | ", joined) if separator == " | " else joined
+        parts.append(f" | {piece} | " if block and piece.strip() else piece)
+    return "".join(parts)
+
+
+def _text(node) -> str:
+    """One record's text, whitespace collapsed once over the whole record."""
+    joined = re.sub(r"(\s*\|\s*)+", " | ", _raw_text(node))
     return " ".join(joined.split()).strip(" |")
 
 
