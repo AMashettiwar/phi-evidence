@@ -107,6 +107,20 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
   measure audience; live does)
 - lesson: never generate code containing escapes through a string; use the Edit/Write tools
 
+### M5–M8 status (b4b91b0, protocol frozen a991baa / 6909c04)
+- G3: world 73/73, 0 false alarms; carrier invariance 23/23, hard negatives 4/4; scale 1,140 files,
+  23.6 MB while scanning (models load once, outside the budget); evasion 14/15 (known limit kept)
+- G4: passes on the stub; Groq run needs the key. 25 injection pages, 0 escapes; 0 of 2,000
+  adversarial reviews pushed an always-flag finding below High
+- G5: protocol frozen before the first scored run; first run started without a key (LLM criterion
+  undecidable by design)
+- G6: live end-to-end via `phi-scan scan --scope`: 0 unmasked values in 7 outputs, schema valid,
+  59/59 replay, measured levels right (IDOR High, mistaken-public page Critical, own record clear)
+- browser refuses non-GET/HEAD (G2 proves no write reached the site)
+- **owner decision open:** the model may move a non-always-flag finding to Review (confidence >= 0.8,
+  25% cap) so rules+LLM can differ from rules; the rulebook says the AI never chooses a level
+- **pending human:** blind review (`eval/review_packet.csv`, `python -m eval.adjudication`)
+
 ### M5 — P3 detection (G3)
 - [ ] validators: SSN, Luhn, NPI (80840), DEA, ICD-10 / LOINC / RxNorm syntax, DOB plausibility
 - [ ] MRN / member-ID format induction; FHIR, HL7v2, DICOM, X12, CSV/XLSX extractors
