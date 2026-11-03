@@ -55,14 +55,21 @@ def main() -> int:
         env["GROQ_API_KEY"] = key
     gates = run([python, "tools/run_gates.py"], target, env)
 
-    ours = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))["acceptance"]
-    theirs = json.loads((target / "eval" / "results.json").read_text(encoding="utf-8"))["acceptance"]
-    same = [(a["criterion"], a["value"]) for a in ours] == [(b["criterion"], b["value"]) for b in theirs]
-    print(f"\nfresh clone gates exit {gates}; acceptance table identical to the committed one: {same}")
-    if not same:
-        for a, b in zip(ours, theirs):
-            if a != b:
-                print(f"  committed {a['criterion']}: {a['value']}\n  clone     {b['criterion']}: {b['value']}")
+    # The deterministic arms must match byte for byte. The model's answers do
+    # not repeat exactly (Groq's seed is best effort), so its rows are shown
+    # side by side, not required to be equal.
+    ours = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))
+    theirs = json.loads((target / "eval" / "results.json").read_text(encoding="utf-8"))
+    same = all(json.dumps(ours["arms"][arm], sort_keys=True) == json.dumps(theirs["arms"][arm], sort_keys=True)
+               for arm in ("rules", "presidio"))
+    ledger = lambda r: sorted((e["id"], e["kind"]) for e in r["ledger"] if e["arm"] == "rules")  # noqa: E731
+    same = same and ledger(ours) == ledger(theirs)
+    print(f"\nfresh clone gates exit {gates}; rules and presidio arms and the rules ledger identical "
+          f"to the committed run: {same}")
+    for name in ("rules_vs_rules+llm",):
+        a, b = ours["comparisons"].get(name, {}), theirs["comparisons"].get(name, {})
+        print(f"  {name}: committed b={a.get('only_first_right')} c={a.get('only_second_right')}; "
+              f"clone b={b.get('only_first_right')} c={b.get('only_second_right')}")
     return 0 if same else 1
 
 

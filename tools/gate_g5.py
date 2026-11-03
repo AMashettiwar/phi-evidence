@@ -107,8 +107,10 @@ def main() -> int:
     for name, value, ok in rows:
         print(f"  {'PASS' if ok else 'UNDECIDED' if ok is None else 'FAIL':9} {name:34} {value}")
     (ROOT / "eval" / "results.json").write_text(
-        json.dumps({"acceptance": [{"criterion": n, "value": v, "pass": ok} for n, v, ok in rows],
-                    **results}, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        # "acceptance" already holds the thresholds; the table needs its own key.
+        json.dumps({**results, "acceptance_table": [{"criterion": n, "value": v, "pass": ok}
+                                                    for n, v, ok in rows]},
+                   indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     failed = [n for n, _, ok in rows if ok is not True]
     if failed:
         print(f"\nFAIL  {len(failed)} criteria not met or not decidable: {failed}")

@@ -127,6 +127,13 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - split design flaw: items rotate through templates by index and every 5th is held out, so some
   templates exist only in held-out. Held-out therefore measures unseen templates. Not inspected;
   instead `tests/probes_prose.py` (40 independent items) found the general gaps -> run 3
+- runs 4-6 (Groq): every recall stratum passes (S1 159/160, held-out 0.969 after rendering by
+  record); precision 0.982; clean-page false alarms 18/720, all one held-out consented-testimonial
+  layout never seen in development; rules vs rules+LLM b=1 c=1 (neutral)
+- M9 fresh clone: 22/24 gates; rules/Presidio arms and rules ledger byte-identical. Kappa 0.643 in
+  the clone vs 0.820 here: the LLM stability criterion is not reliably met
+- **open decision for the owner:** inspect the held-out consent items to fix the last false alarms
+  (and disclose it), or keep them blind
 - deviation: procedures and tests are recognised by medical word formation and a short noun list,
   British spellings folded; licensed SNOMED/CPT unavailable, public ICD-10-PCS not downloaded
 
