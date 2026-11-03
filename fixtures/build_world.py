@@ -62,8 +62,8 @@ DIAGNOSES = [
 ]
 
 DOCTORS = [
-    ("Dr. Helena Marsh", "Medical Oncology", "1841290375"),
-    ("Dr. Idris Bhandari", "Clinical Genetics", "1932415768"),
+    ("Dr. Helena Marsh", "Medical Oncology", "1841290376"),
+    ("Dr. Idris Bhandari", "Clinical Genetics", "1932415767"),
     ("Dr. Katarzyna Wolna", "Laboratory Medicine", "1073649281"),
 ]
 
@@ -181,7 +181,8 @@ def main() -> int:
 <body><h1>Northbridge Health</h1>
 <p>Genomic and oncology care. Appointments: (617) 555-0142.</p>
 <p>Contact us at info@northbridge.example or visit 400 Harbor Way, Boston, MA.</p>
-<p>General information only. This page does not describe any patient.</p></body></html>""")
+<p>General information only. This page does not describe any patient.</p>
+<nav><a href="/portal">Patient portal</a> <a href="/portal/visit">Check-in</a> <a href="/portal/lookup">Find a visit</a> <a href="/updates.html">Updates</a> <a href="/events.html">Events</a> <a href="/checkin.html">Kiosk</a> <a href="/portal-cache.html">Offline mode</a> <a href="/resources.html">Resources</a> <a href="/reports/annual-outcomes.html">Outcomes</a> <a href="/forms/sample-intake.html">Forms</a> <a href="/billing/codes.html">Billing</a> <a href="/stories/with-consent.html">Stories</a> <a href="/team.html">Team</a> <a href="/services.html">Services</a> <a href="/article.html">Article</a> <a href="/patient-story.html">Patient Story</a> <a href="/referrals.html">Referrals</a> <a href="/detail.html">Detail</a> <a href="/downloads.html">Downloads</a> <a href="/storage.html">Storage</a> <a href="/tracker.html">Tracker</a> <a href="/analytics.html">Analytics</a> <a href="/hidden.html">Hidden</a> <a href="/title.html">Title</a> <a href="/error.html">Error</a></nav></body></html>""")
     clean("site/index.html", "page_text", "contact_block", "info@northbridge.example",
           "Company contact block. Same domain as a patient email elsewhere, but this record is the organisation's own contact details.")
 
@@ -671,6 +672,7 @@ Disallow: /portal/patient?mrn={p[14]['mrn']}
     write("site/portal-cache.html", f"""<!doctype html><html><head><title>Loading</title></head>
 <body><script>
 const open = indexedDB.open("visits", 1);
+open.onupgradeneeded = () => open.result.createObjectStore("visits", {{autoIncrement: true}});
 open.onsuccess = () => open.result.transaction("visits", "readwrite")
   .objectStore("visits").put({{mrn: "{idb['mrn']}", dx: "{idb['code']}"}});
 </script></body></html>""")

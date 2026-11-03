@@ -21,6 +21,7 @@ GATES = [
     ["tools/check_world.py"],
     ["tools/gate_g1.py"],
     ["tools/check_collect.py"],
+    ["tools/gate_g2.py"],
     ["tools/check_detect.py"],
     ["fixtures/build_injection.py"],
     ["tools/check_ai.py"],

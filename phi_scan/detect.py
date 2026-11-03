@@ -1150,8 +1150,11 @@ def detect(index_path: Path, vault_root: Path,
                 rank(current["carrier"]), -current["length"]):
             best[slot] = finding
 
+    # Never order by a token: tokens change with each scan's key, and the same
+    # scan must number its findings the same way every time.
     ordered = sorted(best.values(),
-                     key=lambda f: (f["path"], f["carrier"], f["obs_id"], f["value_hash"]))
+                     key=lambda f: (f["path"], f["carrier"], f["obs_id"], f["offset"],
+                                    f["length"], f["value_mask"]))
     for index, finding in enumerate(ordered, start=1):
         finding["finding_id"] = f"f{index:05d}"
     return ordered
