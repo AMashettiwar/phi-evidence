@@ -127,6 +127,10 @@ NAME_STOP: set[str] = {
     "history", "account", "settings", "preferences", "search", "enter",
     "term", "above", "questions", "contact", "appointments", "general",
     "information", "this", "page", "does", "not", "describe", "any",
+    # product and software words: "Augusta Digital Pathology", a real app's
+    # title, was read as the person "Augusta Digital". None is a surname.
+    "digital", "online", "mobile", "virtual", "portal", "analytics", "telehealth",
+    "labs", "data", "web", "app", "viewer", "catalogue", "catalog",
     # clinical phrasing that capitalises at sentence or heading start
     "invasive", "stage", "type", "chronic", "major", "relapsing", "multiple",
     "remitting", "antiretroviral", "therapy", "pathogenic", "variant",

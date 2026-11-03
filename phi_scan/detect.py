@@ -219,7 +219,10 @@ def ssn_valid(value: str) -> bool:
 # English abstract nouns end like this. A surname almost never does, so a
 # capitalised pair whose last word is "Collection" or "Documentation" is a field
 # label in a structured API, not a person.
-ABSTRACT_SUFFIXES = ("tion", "sion", "ment", "ity", "ness", "ous", "ence", "ance")
+# "-logy" and "-graphy" name disciplines and departments: "Digital Pathology"
+# on a real app's description was read as a person.
+ABSTRACT_SUFFIXES = ("tion", "sion", "ment", "ity", "ness", "ous", "ence", "ance",
+                     "logy", "graphy")
 
 
 def _abstract_noun(token: str) -> bool:
@@ -684,7 +687,9 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     # guessing there costs more precision than the recall is worth.
     if names and not mrns:
         for match in BARE_ID.finditer(text):
-            mrns.append(match.group(0))
+            # One digit repeated ("000000") is a placeholder in a form, not a record.
+            if len(set(match.group(0))) > 1:
+                mrns.append(match.group(0))
     # A number beside its own label is a record number even without a name.
     for value in _labelled_ids(text):
         if value not in mrns:
@@ -1002,6 +1007,14 @@ def rules_for(carrier: str, tags: list[str]) -> list[str]:
     return chosen
 
 
+def _byte_span(row: dict, text: str, position: int, value: str) -> tuple[int, int]:
+    """Where a value found at character `position` of a row's text sits in the
+    stored bytes. Characters and bytes differ after any non-ASCII text ("·",
+    "é"), and evidence that counted characters pointed at the wrong bytes."""
+    return (row["offset"] + len(text[:position].encode("utf-8")),
+            len(text[position:position + len(value)].encode("utf-8")))
+
+
 def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
     """Return (text to analyse, hash of the encoded token if it was decoded)."""
     payload = vault.get(row["doc"])
@@ -1316,7 +1329,7 @@ def detect(index_path: Path, vault_root: Path,
                     offset, length = row["offset"], row["length"]
                 else:
                     cursor = position + len(quasi)
-                    offset, length = row["offset"] + position, len(quasi)
+                    offset, length = _byte_span(row, text, position, quasi)
                 findings.append({
                     "path": row["path"], "carrier": row["carrier"],
                     "obs_id": row["obs_id"], "doc": row["doc"],
@@ -1389,7 +1402,7 @@ def detect(index_path: Path, vault_root: Path,
                 if position < 0:
                     position = 0
                 cursor = position + max(1, len(ids["primary"]))
-                offset, length = row["offset"] + position, len(ids["primary"])
+                offset, length = _byte_span(row, text, position, ids["primary"])
 
             hashes = {digest(v) for v in ids["values"]}
             if covered:

@@ -43,6 +43,12 @@ from .collect import Sink, collect
 from .vault import Vault
 
 PAGE_SUFFIXES = ("", ".html", ".htm")
+# Static files a browser asks for again on every page. One copy per scan is
+# enough: asking again only adds load to the site and uses up the request cap.
+ASSET_SUFFIXES = (".js", ".mjs", ".css", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+                  ".ico", ".woff", ".woff2", ".ttf")
+# Requested once per scan to learn what this server sends for a missing page.
+NOT_FOUND_PROBE = "/phi-scan-page-that-does-not-exist"
 # Build leftovers worth one GET each, in scope like everything else.
 WELL_KNOWN = ("/.env", "/.git/config", "/.git/COMMIT_EDITMSG", "/swagger.json",
               "/openapi.json", "/api/v2/openapi.json")
@@ -129,6 +135,9 @@ class Guard:
         self.last = time.monotonic()
 
     def record(self, url: str, status: int) -> None:
+        # The gap is counted again from the answer, not only from the send: a
+        # request that left late arrived 0.94 s before the next one (G2).
+        self.last = time.monotonic()
         self.sent.append({"url": url, "status": status})
         if status == 429:
             self.stopped = "server asked us to slow down (429)"
@@ -186,6 +195,8 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
             context.add_cookies(session(me))
 
         redirects: list[str] = []
+        assets: dict[str, object] = {}      # url -> the response, for repeat requests
+        not_found: bytes | None = None      # what the server sends for any unknown address
 
         def route(route, request) -> None:
             """Every browser request, sub-resources included, is made here.
@@ -206,6 +217,9 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 guard.writes_blocked.append({"url": request.url, "method": request.method})
                 route.abort()
                 return
+            if request.url in assets:
+                route.fulfill(response=assets[request.url])
+                return
             guard.wait()
             try:
                 response = route.fetch(max_redirects=0)
@@ -218,13 +232,17 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 redirects.append(urljoin(request.url, response.headers["location"]))
                 route.fulfill(status=204, body="")
                 return
+            if response.status == 200 and Path(urlparse(request.url).path).suffix in ASSET_SUFFIXES:
+                assets[request.url] = response
             route.fulfill(response=response)
 
         context.route("**/*", route)
 
         def observe(url: str, status: int, headers: dict, body: bytes) -> None:
             rel = local_path(url, headers.get("content-type", ""))
-            if status == 200:
+            # A single-page app answers "/.env" with its own home page. That is
+            # the app saying "not found", not a leaked file, so it is not kept.
+            if status == 200 and not (body == not_found and url.rstrip("/") != base):
                 keep(url, status, headers, body)
             if "location" in headers:
                 runtime.append((rel, "response_header", f"Location: {headers['location']}"))
@@ -256,9 +274,12 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 runtime.append((rel, "url", url))
             return rel
 
+        status, _, body = fetch(context.request, base + NOT_FOUND_PROBE, store=False)
+        not_found = body if status == 200 else None
         robots = urllib.robotparser.RobotFileParser()
         status, _, body = fetch(context.request, base + "/robots.txt")
-        robots.parse(body.decode("utf-8", "replace").splitlines() if status == 200 else [])
+        robots.parse(body.decode("utf-8", "replace").splitlines()
+                     if status == 200 and body != not_found else [])
         queue = [base + "/"] + [base + path for path in WELL_KNOWN]
         status, _, body = fetch(context.request, base + "/sitemap.xml")
         if status == 200:
@@ -268,7 +289,9 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         try:
             while queue and len(seen) < guard.page_cap and guard.stopped is None:
                 url = queue.pop(0).split("#")[0]
-                if url in seen or not guard.allowed(url):
+                # A script or image a page already loaded is captured; fetching
+                # its link again would only spend a request and a page slot.
+                if url in seen or url in assets or not guard.allowed(url):
                     continue
                 seen.add(url)
                 if not robots.can_fetch("*", url):

@@ -60,6 +60,9 @@ Other gates in the list: `pytest -q tests`, `check_world`, `check_crawl`, `check
 
 ## 6. Known limits
 
+- First real application (2026-11-03, a Vue single-page app): 12 of 12 findings on its public pages were false alarms caused by stylesheets, SVG attributes and compressed code. Fixed and covered by `tests/test_real_app.py`; see `tasks/todo.md`. Precision on real applications is otherwise unmeasured: the benchmark has no real framework code.
+- Names are not read inside compressed scripts (over 2,000 characters on very long lines), so a name hard-coded in a bundle is missed; record numbers and e-mail addresses there still are.
+- Stylesheets are read only for `content:` text, and SVG files only for drawn text.
 - No OCR: text burned into images is not read.
 - No archive, e-mail or office-container recursion beyond the carriers listed in `TESTING.md`.
 - The crawl sees only linked, sitemapped and a fixed list of well-known paths. Unlinked files need the file scan.

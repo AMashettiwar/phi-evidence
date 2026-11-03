@@ -1,0 +1,106 @@
+"""False alarms from the first real application scanned (2026-11-03).
+
+A Vue single-page app with Vuetify styles: 12 findings, all wrong. Each test
+below rebuilds one cause from scratch (no code from that app is copied here)
+and pairs it with a planted leak in the same place, so a fix that only went
+quiet would fail.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from phi_scan.collect import collect  # noqa: E402
+from phi_scan.detect import detect, digest, identifiers  # noqa: E402
+from phi_scan.vault import Vault  # noqa: E402
+
+LEAK = "Rafael Ibarra, MRN 448812, started chemotherapy for breast cancer"
+
+
+def scan(tmp_path, monkeypatch, files: dict[str, str]) -> tuple[list[dict], Vault, list[dict]]:
+    monkeypatch.setenv("PHI_EVIDENCE_KEYS", str(tmp_path / "keys"))
+    source = tmp_path / "src"
+    for name, content in files.items():
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content.encode("utf-8"))
+    out = tmp_path / "out"
+    collect(source, out)
+    rows = [json.loads(line) for line in (out / "index.jsonl").read_text(encoding="utf-8").splitlines()]
+    return detect(out / "index.jsonl", out / "vault", (), context="public-web"), Vault(out / "vault"), rows
+
+
+# Styling a framework ships: a font stack and colour classes whose hex codes
+# are six digits, which beside a "name" read as a record number.
+FONTS = "font-family: Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;"
+COLOURS = "".join(f".bg-indigo-darken-{n}{{background-color:#{code}!important}}"
+                  for n, code in enumerate(("283593", "303f9f", "1a237e", "3949ab"), 1))
+
+
+def test_style_block_reads_only_displayed_text(tmp_path, monkeypatch):
+    page = f"<html><head><style>body {{ {FONTS} }} {COLOURS}</style></head><body><p>Welcome</p></body></html>"
+    assert scan(tmp_path, monkeypatch, {"index.html": page})[0] == []
+    shown = page.replace("</style>", f'.who::after{{content:"{LEAK}"}}</style>')
+    assert scan(tmp_path / "leak", monkeypatch, {"index.html": shown})[0]
+
+
+def test_print_stylesheet_reads_only_displayed_text(tmp_path, monkeypatch):
+    css = f"body{{{FONTS}}}{COLOURS}@media print{{.receipt{{color:#000}}}}"
+    assert scan(tmp_path, monkeypatch, {"assets/index-0e83666a.css": css})[0] == []
+    shown = css.replace(".receipt{color:#000}", f'.receipt::after{{content:"{LEAK}"}}')
+    assert scan(tmp_path / "leak", monkeypatch, {"assets/print.css": shown})[0]
+
+
+def test_svg_attributes_are_not_text(tmp_path, monkeypatch):
+    # The drawing attribute "stroke" read as the disease, the font as a person.
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 64"><title>Northbridge</title>'
+           '<circle cx="28" cy="32" r="21" fill="none" stroke="#0F7C93" stroke-width="3.4" />'
+           f'<text x="60" y="41" font-family="Inter, \'Segoe UI\', Roboto, Arial">Northbridge</text></svg>')
+    assert scan(tmp_path, monkeypatch, {"branding/logo.svg": svg})[0] == []
+    shown = svg.replace(">Northbridge</text>", f">{LEAK}</text>")
+    assert scan(tmp_path / "leak", monkeypatch, {"branding/logo.svg": shown})[0]
+
+
+def test_department_names_are_not_people(tmp_path, monkeypatch):
+    meta = ('<html><head><meta name="description" content="Northbridge University '
+            'Digital Pathology image catalogue and viewer"></head><body></body></html>')
+    assert scan(tmp_path, monkeypatch, {"index.html": meta})[0] == []
+    assert identifiers("Department of Radiology and Cardiac Sonography")["keys"] == []
+    # A first name before a product word is a product, as a page title.
+    title = "<html><head><title>Harper Digital Pathology</title></head><body></body></html>"
+    assert scan(tmp_path / "title", monkeypatch, {"index.html": title})[0] == []
+    # A person before a department word is still a person.
+    assert "names" in identifiers("Jane Doe Oncology Report")["keys"]
+
+
+def test_small_minified_chunk_is_code(tmp_path, monkeypatch):
+    # A code-split chunk: one line, a few thousand characters, title-case UI
+    # strings, a placeholder email and a six-zero verification-code hint.
+    parts = ['import{a as e,b as t}from"./index-4c7a6379.js";',
+             'const n={class:"auth-shell"},o={label:"Verification code",placeholder:"000000",maxlength:"6"};',
+             'const r={title:"Digital Pathology",sub:"Image Catalogue",email:"name@northbridge.edu"};']
+    parts += [f"function f{i}(a,s){{return a.value?s(\"Sign In\",{{class:\"v-btn-{i}\"}}):null}};" for i in range(60)]
+    chunk = "".join(parts) + "\n"
+    found, _, rows = scan(tmp_path, monkeypatch, {"assets/LoginView-1c1031d2.js": chunk})
+    assert all(r["extraction"].startswith("minified") for r in rows if r["carrier"] == "js_bundle")
+    assert found == []
+
+
+def test_repeated_digit_placeholder_is_not_a_record_number():
+    assert "mrn" not in identifiers("Jane Doe: enter the code 000000")["keys"]
+    assert "mrn" in identifiers("Jane Doe 4488127")["keys"]
+
+
+def test_evidence_points_at_the_value_after_non_ascii_text(tmp_path, monkeypatch):
+    # Before the fix, a character position was used as a byte position: each
+    # "·" or "é" before the value moved the evidence one byte too early.
+    script = f'// Café · Résumé — notes\nconst note = "{LEAK}";\n'
+    found, vault, _ = scan(tmp_path, monkeypatch, {"notes.js": script})
+    assert found
+    for finding in found:
+        raw = vault.get(finding["doc"])[finding["offset"]:finding["offset"] + finding["length"]]
+        # digest() is keyed by the scan that just ran, so this is the same token.
+        assert digest(raw.decode("utf-8")) == finding["value_hash"], raw

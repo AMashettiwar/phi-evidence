@@ -148,6 +148,27 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
   paths, or the scope's `api` section; `capture.json` -> `access_test` says what ran or why not
 - [x] `START-HERE.md` for people who do not run code
 - **verify:** G2 and G6 pass (L071 High via auto-discovery); launcher run on the served site
+
+### First real application (2026-11-03): localhost:4000, a Vue + Vuetify SPA, public pages
+- 15 pages, 12 findings, **all false alarms**. Causes, each now a test in `tests/test_real_app.py`
+  or `tests/test_single_page_app.py` paired with a planted leak that must still be found:
+  - whole `<style>` blocks and print stylesheets read as text: font stacks became people, colour
+    codes (#283593) record numbers -> only `content:` strings are read
+  - whole SVG files read as text: `stroke=` read as the disease, `font-family` as a person ->
+    only drawn text is read
+  - "Digital Pathology" read as a person -> "-logy"/"-graphy" words are never surnames
+  - a 7,800-character one-line chunk not treated as minified (threshold was 50,000) -> 2,000
+  - a "000000" placeholder became a record number -> one repeated digit is never an id
+  - the SPA answers "/.env" with its home page -> a body equal to the answer for a missing
+    page is not kept; assets a page already loaded are not fetched again
+  - the title "Augusta Digital Pathology" read as the person "Augusta Digital" -> product
+    words (digital, portal, viewer, ...) join NAME_STOP; "Jane Doe Oncology Report" still a name
+- found on the way: evidence offsets counted characters, not bytes, so after any non-ASCII
+  text the span pointed early (replay still matched the wrong bytes) -> `_byte_span`
+- found on the way: pacing was counted from the send, the server measures arrival; G2 saw
+  0.94 s between two requests once the request order changed -> also counted from the answer
+- **verify:** rescan of the same public pages: 0 findings (was 12), 44 requests (was 81),
+  finished without hitting the request cap; G2, G3, G6, check_* and 114 tests pass
 - deviation: procedures and tests are recognised by medical word formation and a short noun list,
   British spellings folded; licensed SNOMED/CPT unavailable, public ICD-10-PCS not downloaded
 

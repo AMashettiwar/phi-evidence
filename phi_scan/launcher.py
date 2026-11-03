@@ -293,8 +293,9 @@ def status(job_id: str) -> bytes:
              "and reachable from this computer.</p>" if not capture["pages"] else "")
     stopped = (f"<p class='error'>The scan stopped early: {esc(capture['stopped'])}.</p>"
                if capture.get("stopped") else "")
-    verified = ("every finding was re-read from the stored evidence and matched"
-                if check["checked"] and not check["mismatched"]
+    verified = ("no findings, so nothing to re-check" if not check["checked"]
+                else "every finding was re-read from the stored evidence and matched"
+                if not check["mismatched"]
                 else f"{len(check['mismatched'])} of {check['checked']} findings did not match their evidence")
     return page("Scan finished", f"""<h1>Scan finished</h1>
 <p>{esc(job['target'])}, {elapsed}. Pages read: {capture['pages']}; requests sent:

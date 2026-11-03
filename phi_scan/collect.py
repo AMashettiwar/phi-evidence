@@ -51,6 +51,13 @@ LOC = re.compile(r"<loc>(.*?)</loc>", re.S | re.I)
 B64 = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 STORAGE = re.compile(r"localStorage\.setItem\((.*?)\);", re.S)
 PRINT = re.compile(r"@media\s+print", re.I)
+# A stylesheet puts words on screen only through `content:`. The rest is code:
+# on the first real app a font stack became a person and a colour (#283593) a
+# record number.
+CSS_CONTENT = re.compile(r"""\bcontent\s*:\s*(["'])((?:\\.|(?!\1)[^\\])*)\1""", re.S)
+# The words an SVG draws (<text>, <title>, <desc>). Its attributes are drawing
+# instructions: stroke="#0F7C93" read as the disease, font-family as a person.
+SVG_TEXT = re.compile(r"<(?!style\b|script\b)[A-Za-z][\w:-]*\b[^>]*>([^<]*[^\s<][^<]*)", re.I)
 ARIA_HIDDEN = re.compile(r"<(\w+)\b[^>]*\baria-hidden\s*=\s*[\"']true[\"'][^>]*>(.*?)</\1>",
                          re.S | re.I)
 JSON_LD = re.compile(
@@ -373,10 +380,12 @@ def _collect_deploy(path: str, text: str, doc: str, sink: Sink) -> None:
 
 
 def _collect_js(path: str, text: str, doc: str, sink: Sink) -> None:
-    # A big file with almost no newlines is a minified bundle. Mark every
+    # A file with almost no newlines is a minified bundle. Mark every
     # observation from it, because name detection on mangled code produces
-    # nonsense: the first real target yielded "New", "Test" and "rn(n".
-    minified = len(text) > 50_000 and text.count("\n") < max(1, len(text) // 500)
+    # nonsense: the first real target yielded "New", "Test" and "rn(n". Bundlers
+    # also split code into small chunks (a 7,800-character login view on one
+    # line), so size alone does not decide it.
+    minified = len(text) > 2_000 and text.count("\n") < max(1, len(text) // 500)
     prefix = "minified_" if minified else ""
     sink.add(path, doc, 0, len(text), "js_bundle", f"{prefix}whole_file")
     for match in B64.finditer(text):
@@ -468,7 +477,13 @@ def _collect_text(path: str, text: str, doc: str, sink: Sink) -> None:
             offset += len(line)
     elif path.endswith(".css"):
         if PRINT.search(text):
-            sink.add(path, doc, 0, len(text), "print_css", "print_media_rule")
+            for match in CSS_CONTENT.finditer(text):
+                sink.add(path, doc, match.start(2), len(match.group(2)), "print_css",
+                         "print_media_rule")
+    elif path.endswith(".svg"):
+        for match in SVG_TEXT.finditer(text):
+            sink.add(path, doc, match.start(1), len(match.group(1)), "downloadable_file",
+                     "svg_text")
     elif "/.git/" in f"/{path}" or path.endswith(".git/config"):
         sink.add(path, doc, 0, len(text), "git_exposure", "whole_file")
     else:
@@ -850,8 +865,9 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
             # CSS can print a patient's name without it ever appearing in the
             # document's text, because the browser generates it.
             for block in re.finditer(r"(?is)<style\b[^>]*>(.*?)</style>", text):
-                sink.add(rel, doc, block.start(1), len(block.group(1)),
-                         "css_hidden", "style_block")
+                for match in CSS_CONTENT.finditer(block.group(1)):
+                    sink.add(rel, doc, block.start(1) + match.start(2), len(match.group(2)),
+                             "css_hidden", "style_block")
 
         if suffix == ".pdf":
             _collect_pdf(rel, data, doc, sink, vault)
