@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import re
 import urllib.parse
@@ -49,6 +50,8 @@ ORG_KEYWORDS = (
 )
 
 _NLP = None
+# The scan's vault key, set by detect(); digest() tokenises values with it.
+_TOKEN_KEY = b""
 _NLP_LOADED = False
 
 # The model dominates the runtime, and the same strings recur constantly across
@@ -180,7 +183,12 @@ def mask(value: str) -> str:
 
 
 def digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    """The HMAC token of a value under the current scan's vault key.
+
+    detect() sets the key. A plain SHA-256 of an SSN is reversible by trying
+    every SSN, so nothing written to a finding is an unkeyed hash of a value.
+    """
+    return hmac.new(_TOKEN_KEY, b"value\0" + value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def ssn_valid(value: str) -> bool:
@@ -944,6 +952,8 @@ def detect(index_path: Path, vault_root: Path,
         raise ValueError(f"unknown context: {context}")
     covered = context == "covered-entity"
     vault = Vault(vault_root)
+    global _TOKEN_KEY
+    _TOKEN_KEY = vault.key
     rows = [json.loads(line) for line in
             Path(index_path).read_text(encoding="utf-8").splitlines() if line]
 

@@ -423,7 +423,12 @@ def _collect_pdf(path: str, data: bytes, raw_doc: str, sink: Sink,
 
 
 def collect(source: Path, out: Path, pylibs: str | None = None,
-            target_host: str | None = None) -> dict:
+            target_host: str | None = None, key: bytes | None = None) -> dict:
+    """Read every file under source into a fresh vault and index under out.
+
+    key: the vault key. Omit it and the scan gets a new random one, which is
+    the point of a per-scan key; pass one only to prove determinism.
+    """
     if pylibs:
         sys.path.insert(0, pylibs)
     source = Path(source)
@@ -438,7 +443,7 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
     if out.exists():
         import shutil
         shutil.rmtree(out)
-    vault = Vault(out / "vault")
+    vault = Vault(out / "vault", key)
     sink = Sink(vault)
 
     files = sorted(p for p in source.rglob("*") if p.is_file())

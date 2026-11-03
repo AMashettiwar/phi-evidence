@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -40,9 +41,13 @@ def main() -> int:
     failures: list[str] = []
 
     # --- run three times ---------------------------------------------------
+    # One key for all three: a real scan gets a fresh key, which changes every
+    # address. What must not change is what the algorithm does with the bytes.
+    shared_key = os.urandom(32)
     manifests = []
     for run in range(RUNS):
-        manifests.append(collect(WORLD, ARTIFACTS / f"run{run}", str(ROOT / "pylibs")))
+        manifests.append(collect(WORLD, ARTIFACTS / f"run{run}", str(ROOT / "pylibs"),
+                                 key=shared_key))
     hashes = {m["index_sha256"] for m in manifests}
     print(f"runs                {RUNS}")
     print(f"distinct index hash {len(hashes)}")

@@ -11,7 +11,6 @@ Run:  python tools/check_detect.py
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from collections import defaultdict
@@ -48,7 +47,7 @@ def main() -> int:
         return cache[key][finding["offset"]:finding["offset"] + finding["length"]]
 
     def digest(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+        return vault.token(value)
 
     # Every finding must point at real bytes. A pointer that resolves to nothing
     # is not evidence.
