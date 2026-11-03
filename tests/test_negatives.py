@@ -69,3 +69,36 @@ def test_consent_marker_must_be_visible_in_the_record():
     assert n.consented_testimonial(Record("Shared with Rosalind's written permission."))
     assert n.consented_testimonial(Record("Names and details changed."))
     assert not n.consented_testimonial(Record("Read Rosalind's inspiring testimonial."))
+
+
+def test_consent_marker_in_the_same_paragraph_counts():
+    page = "<p>Rosalind Achterberg talks about her transplant. <em>Shared with Rosalind's written permission.</em></p><p>Ana Ruiz, diabetes.</p>"
+    assert n.consented_testimonial(Record("Rosalind Achterberg talks about her transplant.", page=page))
+    assert not n.consented_testimonial(Record("Ana Ruiz, diabetes.", page=page))
+
+
+def test_a_name_and_a_condition_without_a_byline_is_not_an_article():
+    assert not n.public_health_article(Record("Freya Bhatt - HIV-1 positive", names=["Freya Bhatt"], health=True))
+
+
+def test_consent_in_a_sibling_cell_or_figure_or_field():
+    row = "<table><tr><td>Paige Bartlett</td><td>hypothyroidism</td><td>Shared with written permission</td></tr></table>"
+    assert n.consented_testimonial(Record("Paige Bartlett", page=row))
+    fig = "<figure><figcaption>John Brown, living with GERD</figcaption><small>Published with John's consent</small></figure>"
+    assert n.consented_testimonial(Record("John Brown, living with GERD", page=fig))
+    assert n.consented_testimonial(Record('{"name": "Hassan Brown", "consent": "written, on file"}'))
+    assert n.consented_testimonial(Record("Testimonial (Published with the person's consent): Xavier Scott"))
+    assert not n.consented_testimonial(Record('{"name": "Hassan Brown", "consent": false}'))
+
+
+def test_organisation_markup_address_and_signature():
+    assert n.company_contact(Record('{"@type": "Organization", "telephone": "713-555-7047"}'))
+    assert n.company_contact(Record("Phone: 993-555-3006", page="<address><strong>Harbor Care</strong><br>Phone: 993-555-3006</address>"))
+    assert n.company_contact(Record("Lakeview Medical Group | Main: 938-555-5214 | info@lakeview.example"))
+    assert not n.company_contact(Record("Ana Ruiz, 993-555-3006, diabetes", names=["Ana Ruiz"], health=True))
+
+
+def test_a_caption_note_right_after_the_figure_counts():
+    page = "<figure><figcaption>John Brown, living with GERD</figcaption></figure><small>Fictional account</small><p>Ana Ruiz, asthma.</p>"
+    assert n.consented_testimonial(Record("John Brown, living with GERD", page=page))
+    assert not n.consented_testimonial(Record("Ana Ruiz, asthma.", page=page))

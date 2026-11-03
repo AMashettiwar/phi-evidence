@@ -56,6 +56,19 @@ def _scan(source: Path, out: Path, limit: int, auth_prefixes: tuple[str, ...],
     return findings
 
 
+def _provider(choice: str):
+    """The review model for --llm; False when one was demanded and is missing."""
+    from .ai import GroqProvider, StubProvider, groq_key  # noqa: PLC0415
+
+    key = groq_key(ROOT)
+    if choice == "groq" and not key:
+        print("--llm groq needs GROQ_API_KEY in the environment or the repo's .env")
+        return False
+    if choice in ("groq", "auto") and key:
+        return GroqProvider(key)
+    return StubProvider() if choice == "stub" else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="phi-scan",
@@ -67,9 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--markdown", type=Path, default=None,
                       help="also write a markdown report here")
 
-    scan = sub.add_parser("scan", help="scan a directory you already have")
-    scan.add_argument("--source", required=True, type=Path)
+    scan = sub.add_parser("scan", help="scan a live target (--scope) or a directory (--source)")
+    target = scan.add_mutually_exclusive_group(required=True)
+    target.add_argument("--scope", type=Path,
+                        help="written scope file: browser capture of the authorised target")
+    target.add_argument("--source", type=Path, help="a directory you already have")
     scan.add_argument("--out", required=True, type=Path)
+    scan.add_argument("--llm", choices=["auto", "groq", "stub", "none"], default="auto",
+                      help="model review: auto uses Groq when GROQ_API_KEY is set")
     scan.add_argument("--limit", type=int, default=20)
     scan.add_argument("--context", choices=["covered-entity", "public-web"],
                       default="covered-entity",
@@ -90,6 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_cmd.add_argument("--delay", type=float, default=1.0)
     crawl_cmd.add_argument("--limit", type=int, default=12)
     crawl_cmd.add_argument("--markdown", type=Path, default=None)
+
+    replay_cmd = sub.add_parser("replay", help="re-read every finding's evidence and check it")
+    replay_cmd.add_argument("out", type=Path)
+    replay_cmd.add_argument("--finding", default=None)
 
     collect_cmd = sub.add_parser("collect", help="turn a source tree into evidence spans")
     collect_cmd.add_argument("--source", required=True)
@@ -112,13 +134,32 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "scan":
-        if not args.source.is_dir():
-            print(f"not a directory: {args.source}")
+        from .pipeline import finish, scan_live  # noqa: PLC0415
+
+        provider = _provider(args.llm)
+        if provider is False:
             return 2
-        _scan(args.source, args.out, args.limit, tuple(args.auth_prefix),
-              args.markdown, context=args.context, emit=args.emit,
-              redact=args.redact)
+        if args.scope:
+            run = scan_live(args.scope, args.out, provider)
+        else:
+            if not args.source.is_dir():
+                print(f"not a directory: {args.source}")
+                return 2
+            findings = _scan(args.source, args.out, args.limit, tuple(args.auth_prefix),
+                             args.markdown, context=args.context, emit=args.emit,
+                             redact=args.redact)
+            run = finish(args.out, findings, [], provider, {"mode": "files",
+                                                            "source": str(args.source)})
+        print(f"{run['findings']} findings {run['levels']}; model {run['model']}; "
+              f"report {args.out / 'report.html'}")
         return 0
+
+    if args.command == "replay":
+        from .evidence import replay  # noqa: PLC0415
+
+        result = replay(args.out, args.finding)
+        print(json.dumps(result, indent=2))
+        return 0 if result["checked"] and not result["mismatched"] else 1
 
     if args.command == "crawl":
         result = crawl(args.url, args.out / "crawl", max_pages=args.max_pages,

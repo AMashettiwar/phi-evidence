@@ -118,9 +118,29 @@ def _gaps(data: str, excluded: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return kept
 
 
+INLINE_TAGS = re.compile(r"</?(?:span|b|i|em|strong|a|small|sup|sub|font|mark|u|s|abbr|code)\b[^>]*>", re.I)
+LINE_BREAKS = re.compile(r"[ \t]*\n\s*")
+# A table row is one record (spec 2.3): its cells stay on one line.
+CELL = re.compile(r"</t[dh]>\s*<t[dh]\b[^>]*>", re.I)
+
+
+def _rendered_text(text: str) -> str:
+    """The page as a reader sees it: inline tags vanish without a space, block
+    tags become line breaks. A name split across spans ("Na</span><span>dia")
+    is one word on screen and must be one word to the detector."""
+    body = SCRIPT_BLOCK.sub("\n", STYLE_BLOCK.sub("\n", COMMENT.sub("\n", text)))
+    body = CELL.sub(" | ", body)
+    return LINE_BREAKS.sub("\n", TAG.sub("\n", INLINE_TAGS.sub("", body))).strip()
+
+
 def _collect_html(path: str, text: str, doc: str, sink: Sink,
                   target_host: str | None = None) -> None:
     excluded: list[tuple[int, int]] = []
+    rendered = _rendered_text(text)
+    if rendered:
+        encoded = rendered.encode("utf-8")
+        sink.add(path, sink.vault.put(encoded), 0, len(encoded), "page_text", "rendered_text",
+                 "rendered_text")
 
     for match in COMMENT.finditer(text):
         sink.add(path, doc, match.start(1), len(match.group(1)), "hidden_code", "html_comment")
@@ -415,11 +435,15 @@ def _office_records(archive) -> list[tuple[str, str, str]]:
                 records.append(("tracked_changes", f"tracked_{match.group(1)}", text))
 
     if "docProps/core.xml" in names:
+        # The properties block is one record, like one JSON object: a creator
+        # and a subject in the same file's properties describe the same thing.
+        fields = []
         for match in re.finditer(r"<(\w+:\w+)(?:\s[^>]*)?>([^<]+)</\1>", read("docProps/core.xml")):
             value = html_module.unescape(match.group(2)).strip()
             if value:
-                records.append(("file_metadata", "core_property",
-                                f"{match.group(1).split(':')[1]}: {value}"))
+                fields.append(f"{match.group(1).split(':')[1]}: {value}")
+        if fields:
+            records.append(("file_metadata", "core_properties", "\n".join(fields)))
 
     for name in sorted(n for n in names if re.fullmatch(r"ppt/notesSlides/[^/]+\.xml", n)):
         text = _xml_text(read(name), "a:t")
@@ -479,13 +503,13 @@ def _collect_image(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vaul
     report says so. Metadata is different: PNG text chunks and JPEG APP1 blocks
     routinely carry a patient name, a device and a date.
     """
-    # EXIF is read as tagged fields, one row per tag, so the tag name is the
-    # evidence. Only an image without EXIF falls back to printable strings.
+    # EXIF is read as tagged fields, kept as one record: one image's metadata
+    # block, the way one JSON object is one record. Only an image without EXIF
+    # falls back to printable strings.
     tags = _exif_tags(data)
-    for tag in tags:
-        encoded = tag.encode("utf-8")
-        sink.add(path, vault.put(encoded), 0, len(encoded), "exif", "exif_tag", "exif_tag")
     if tags:
+        encoded = "\n".join(tags).encode("utf-8")
+        sink.add(path, vault.put(encoded), 0, len(encoded), "exif", "exif_block", "exif_block")
         return
 
     strings: list[str] = []

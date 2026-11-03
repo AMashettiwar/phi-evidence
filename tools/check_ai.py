@@ -87,7 +87,9 @@ def main() -> int:
             survived += 1
         always = any(k in finding["identifiers"] for k in ("ssn", "mrn", "plan_id"))
         minimum = "high" if always else "medium"
-        if FLOOR[after["level"]] <= FLOOR[minimum]:
+        # A finding that started below the floor (a Review item) must simply
+        # not go lower; the floor is not a reason to raise it.
+        if FLOOR[after["level"]] <= max(FLOOR[minimum], FLOOR[finding["level"]]):
             floor_ok += 1
     print(f"survived hostile review   {survived}/{len(base)}")
     print(f"held its floor            {floor_ok}/{len(base)}")

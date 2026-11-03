@@ -26,7 +26,7 @@ from .vault import Vault
 
 CANONICAL_FIELDS = ("finding_id", "path", "carrier", "extraction", "offset", "length",
                     "context_offset", "context_length", "identifiers", "sensitive",
-                    "value_mask", "level", "rules", "evidence_grade")
+                    "value_mask", "level", "rules", "evidence_grade", "person")
 
 
 def canonical(findings: list[dict]) -> bytes:

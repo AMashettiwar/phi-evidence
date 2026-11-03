@@ -33,13 +33,17 @@ ORDER = ("critical", "high", "medium", "review")
 HIGH_CARRIERS = {
     "url", "title", "hidden_code", "css_hidden", "browser_storage",
     "print_css", "html_attribute", "meta_tag", "inline_script",
+    "aria_hidden", "json_ld", "hidden_sheet", "tracked_changes", "speaker_notes", "exif",
+    "indexeddb", "cookie", "response_header",
 }
 
 # Carriers where the data has left the organisation, or is offered to strangers.
 WITHHOLD_CARRIERS = {"third_party", "sitemap", "robots_txt"}
 
 # Carriers whose audience is one person's device, not the open internet.
-CLIENT_SIDE = {"browser_storage"}
+# Response headers count here too: Set-Cookie and Location go to the one
+# browser that made the request.
+CLIENT_SIDE = {"browser_storage", "indexeddb", "cookie", "response_header"}
 
 
 def audience(path: str, auth_prefixes: tuple[str, ...]) -> str:

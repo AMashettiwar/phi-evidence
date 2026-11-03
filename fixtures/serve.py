@@ -165,6 +165,11 @@ class SiteHandler(BaseHTTPRequestHandler):
         self.handle_request(body=True)
 
     def do_POST(self) -> None:
+        # Logged, so a gate can prove no write ever reached the target.
+        append(OUT / "access.jsonl", {"ts": round(time.time(), 3), "method": "POST",
+                                      "path": urlparse(self.path).path, "query": "",
+                                      "referer": self.headers.get("Referer"),
+                                      "user_agent": self.headers.get("User-Agent")})
         self.send_error(405, "This fixture is read-only")
 
     def handle_request(self, body: bool) -> None:

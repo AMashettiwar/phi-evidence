@@ -80,14 +80,32 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
   as evidence and aborted (never sent); every request delayed to keep >=1 s gaps; screenshots taken
   with all text blurred (redacted at capture).
 
-### M4 — P2 collection and evidence chain (G2)
-- [ ] Playwright collector: HAR + bodies + route interception, isolated profile
-- [ ] API collector from the schema; file collector for the four document types
-- [ ] scope guard (0 out-of-scope requests), rate limit (concurrency 1, >=1 s + jitter, page cap)
-- [ ] HMAC tokenisation at ingest (per-scan salt); encrypted, access-logged vault with TTL
-- [ ] evidence bundle: hashes, timestamps, versions, replay command
-- [ ] logged-out re-fetch, indexability probe (canaries only), identity oracle A/B
-- **verify (G2):** two runs byte-identical canonical JSON; out-of-scope = 0; min gap >= 1.000 s from HAR; raw planted values in artifacts = 0; 20/20 replays identical
+### M4 — P2 collection and evidence chain (G2)  (done, 9b02e71; world re-frozen c29c35b)
+- [x] Playwright capture (`phi_scan/browser.py`): one route fetches every request with redirects
+      off, paced and scope-checked; out-of-scope requests recorded and aborted; HAR + blurred
+      screenshots into the vault; bodies only in a temp mirror
+- [x] file collector: aria_hidden, json_ld, indexeddb, cookie, response_header, hidden_sheet,
+      tracked_changes, file_metadata (docProps), speaker_notes, exif
+- [x] encrypted, access-logged, expiring vault; HMAC tokens; canonical findings.json + evidence.jsonl
+- [x] logged-out re-fetch (audience), identity oracle (self / other), Cache-Control public, X-Robots-Tag
+- **verified (G2):** canonical identical, tracker received 0, min server gap 1.014 s, 0 planted values
+  in artifacts, 62/62 replay. Live recall 65/73: the 8 misses are files nothing links to (v1 API,
+  DICOM, FHIR bundle, logs, encoded value) — a stated crawl limit; the file scan finds all 73.
+- known: indexability is from robots.txt + X-Robots-Tag only; no search-engine probe (canaries only
+  was the brief's constraint, and no engine is in scope)
+
+### M5 progress notes
+- corpus baseline (detector tuned on the 60-leak world): S1 52%, S2 67%, S3 86%, S4 46%, S5 83%,
+  S6 36% recall; 85/720 negatives flagged. Error analysis on the dev split only.
+- done: clinical NER (`phi_scan/clinical.py`, scispaCy en_ner_bc5cdr_md, word-like mention filter),
+  negative predicates wired into detect (+ `cleared` reasons), own record via oracle or `own_ids`,
+  measured audience, schema-aware HL7 (message = record, DG1 dx), X12 (REF*EA, HI dx, payer
+  skipped, natural name order), CSV dx/record headers, labelled MRN forms, Medicare MBI,
+  de-obfuscation (`phi_scan/normalize.py`), rendered page text for split nodes, record = whole
+  docProps / EXIF block, SQL DDL skipped, lazy clinical-file check, vault log/cache
+- world: 73/73 caught, 0 false alarms, 50/50 always-flag; only L074 level differs (static cannot
+  measure audience; live does)
+- lesson: never generate code containing escapes through a string; use the Edit/Write tools
 
 ### M5 — P3 detection (G3)
 - [ ] validators: SSN, Luhn, NPI (80840), DEA, ICD-10 / LOINC / RxNorm syntax, DOB plausibility

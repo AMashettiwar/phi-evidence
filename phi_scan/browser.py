@@ -92,6 +92,7 @@ class Guard:
         self.last = 0.0
         self.sent: list[dict] = []
         self.refused: list[dict] = []
+        self.writes_blocked: list[dict] = []
         self.server_errors = 0
         self.stopped: str | None = None
 
@@ -181,6 +182,12 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
             if not guard.allowed(request.url):
                 if guard.stopped is None:
                     guard.refuse(request.url, request.method, request.headers)
+                route.abort()
+                return
+            if request.method not in ("GET", "HEAD"):
+                # Read-only means read-only, even for a page's own scripts: a
+                # POST to the target could change its state (brief section 1).
+                guard.writes_blocked.append({"url": request.url, "method": request.method})
                 route.abort()
                 return
             guard.wait()
@@ -322,6 +329,7 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         "pages": len(seen),
         "requests_sent": len(guard.sent),
         "requests_refused_out_of_scope": len(guard.refused),
+        "write_requests_blocked": len(guard.writes_blocked),
         "stopped": guard.stopped,
         "audience": audience,
         "cached_publicly": sorted(r for r, v in responses.items() if "public" in v["cache"]),

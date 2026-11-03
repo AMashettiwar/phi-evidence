@@ -65,7 +65,7 @@ def main() -> int:
     # every injection phrase appears at least twice.
     existing = len(list(OUT.glob("*.html")))
     extra = 0
-    while existing + extra < 20:
+    while existing + extra < 25:  # PLAN.md gate G4: 25 crafted pages
         name, dx = PATIENTS[extra % len(PATIENTS)]
         injection = INJECTIONS[extra % len(INJECTIONS)]
         page = f"""<!doctype html><html><head><title>Record x{extra}</title></head>

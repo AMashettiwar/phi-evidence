@@ -69,6 +69,12 @@ class Vault:
             (self.root / "objects").mkdir(parents=True, exist_ok=True)
             meta_path.write_text(json.dumps(self.meta, indent=2) + "\n", encoding="utf-8")
         self._aead = AESGCM(self.key)
+        # Rows are read in file order, so consecutive reads share an object:
+        # one decrypted object is kept, and the log is held open. Opening the
+        # log per read was a third of detection time on Windows.
+        self._last: tuple[str, bytes] | None = None
+        self._log = None
+        self._logged: set[tuple[str, str]] = set()
 
     def _path(self, address: str) -> Path:
         return self.root / "objects" / address[:2] / address
@@ -94,20 +100,34 @@ class Vault:
         return address
 
     def get(self, address: str, purpose: str = "detect") -> bytes:
+        """Decrypt one object. The first read of each object for each purpose is
+        logged; a repeat read for the same purpose is the same access."""
         if datetime.now(timezone.utc) > datetime.fromisoformat(self.meta["expires"]):
             raise VaultExpired(f"vault {self.root} expired on {self.meta['expires']}")
+        if (address, purpose) not in self._logged:
+            if self._log is None:
+                self._log = (self.root / "access.log").open("a", encoding="utf-8")
+            self._log.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                        "actor": self.actor, "purpose": purpose,
+                                        "object": address}) + "\n")
+            self._log.flush()
+            self._logged.add((address, purpose))
+        if self._last is not None and self._last[0] == address:
+            return self._last[1]
         blob = self._path(address).read_bytes()
-        with (self.root / "access.log").open("a", encoding="utf-8") as log:
-            log.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                  "actor": self.actor, "purpose": purpose,
-                                  "object": address}) + "\n")
-        return self._aead.decrypt(blob[:12], blob[12:], address.encode())
+        data = self._aead.decrypt(blob[:12], blob[12:], address.encode())
+        self._last = (address, data)
+        return data
 
     def has(self, address: str) -> bool:
         return self._path(address).exists()
 
     def destroy(self) -> None:
         """Delete every object and the key. The log of what existed stays."""
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+        self._last = None
         shutil.rmtree(self.root / "objects", ignore_errors=True)
         (key_store() / f"{self.meta['key_id']}.key").unlink(missing_ok=True)
         with (self.root / "access.log").open("a", encoding="utf-8") as log:

@@ -29,6 +29,7 @@ def main() -> int:
     record = {
         "world_key_sha256": sha256(KEYS / "world_key.json"),
         "corpus_key_sha256": sha256(KEYS / "corpus_key.json"),
+        "protocol_sha256": sha256(ROOT / "eval" / "protocol.md"),
         "frozen_on": date.today().isoformat(),
         "generators_at_commit": subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip(),

@@ -60,14 +60,16 @@ def main() -> int:
     for server in servers:
         threading.Thread(target=server.serve_forever, daemon=True).start()
     shutil.rmtree(OUT, ignore_errors=True)
-    runs, gaps, tracker_hits = [], [], 0
+    runs, gaps, tracker_hits, posts = [], [], 0, 0
     try:
         for number in (1, 2):
             serve.OUT.mkdir(parents=True, exist_ok=True)
             for name in ("access.jsonl", "tracker_hits.jsonl"):
                 (serve.OUT / name).write_text("", encoding="utf-8")
             runs.append(scan(OUT / f"run{number}"))
-            stamps = [entry["ts"] for entry in lines(serve.OUT / "access.jsonl")]
+            arrivals = lines(serve.OUT / "access.jsonl")
+            posts += sum(entry["method"] != "GET" and entry["method"] != "HEAD" for entry in arrivals)
+            stamps = [entry["ts"] for entry in arrivals]
             gaps += [later - earlier for earlier, later in zip(stamps, stamps[1:])]
             tracker_hits += len(lines(serve.OUT / "tracker_hits.jsonl"))
     finally:
@@ -83,6 +85,12 @@ def main() -> int:
     print(f"findings             {len(runs[0]['findings'])} / {len(runs[1]['findings'])}")
     print(f"canonical identical  {identical}")
     print(f"tracker received     {tracker_hits}  (must be 0)")
+    print(f"writes reaching site {posts}  (must be 0; blocked by the scanner: "
+          f"{record['write_requests_blocked']})")
+    if posts:
+        problems.append(f"{posts} non-GET requests reached the target")
+    if not record["write_requests_blocked"]:
+        problems.append("no page write was attempted and blocked: the method guard was never exercised")
     print(f"min request gap      {min(gaps):.3f}s  (must be >= {gap:.3f})")
     if not identical:
         problems.append("the two runs' canonical findings differ")

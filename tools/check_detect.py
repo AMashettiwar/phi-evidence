@@ -30,12 +30,16 @@ WORLD = ROOT / "fixtures" / "world"
 OUT = ROOT / "artifacts" / "g3"
 NEVER_MISS = {"ssn", "mrn", "plan_id"}
 # Paths the operator declares as behind a login. Static collection cannot tell.
-AUTH_PREFIXES = ("portal",)
+AUTH_PREFIXES = ("portal", "api/v2/patients")
+# The scan runs as the scope's account; its own record is not a finding.
+SCOPE = yaml.safe_load((ROOT / "fixtures" / "scope.yaml").read_text(encoding="utf-8"))
+OWN_IDS = frozenset(a["patient_id"] for a in SCOPE["accounts"] if a["name"] == SCOPE["scan_as"])
 
 
 def main() -> int:
     manifest = collect(WORLD, OUT, str(ROOT / "pylibs"))
-    findings = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web")
+    findings = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web",
+                      own_ids=OWN_IDS)
     vault = Vault(OUT / "vault")
     cache: dict[str, bytes] = {}
 
@@ -179,7 +183,8 @@ def main() -> int:
         print(f"  patient values present: {leaked[:5]}")
 
     # --- same input, same findings -----------------------------------------
-    again = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web")
+    again = detect(OUT / "index.jsonl", OUT / "vault", AUTH_PREFIXES, context="public-web",
+                      own_ids=OWN_IDS)
     stable = json.dumps(again, sort_keys=True) == rendered
     print(f"detection deterministic    {stable}")
 

@@ -12,6 +12,7 @@ detector enforces that; these functions do not need to know it.
 
 from __future__ import annotations
 
+import html
 import ipaddress
 import re
 from dataclasses import dataclass, field
@@ -38,10 +39,25 @@ ROLE_MAILBOX = re.compile(r"\b(?:info|contact|hello|appointments|billing|support
 CODE = re.compile(
     r"\b(?:[A-TV-Z]\d{2}(?:\.\d{1,4}[A-Z]?)?|\d{5}|\d{1,5}-\d)\b")  # ICD-10, CPT, LOINC
 CONSENT = re.compile(
-    r"\b(?:shared with (?:\w+'s )?(?:written )?permission|with (?:\w+'s )?(?:written )?"
-    r"permission|used with permission|consented to (?:share|publish)|names? (?:and details )?"
-    r"(?:have been |has been |were )?changed|dramati[sz]ation|fictional|composite character)",
+    r"\b(?:with (?:the )?(?:\w+'s |person's |patient's |their |his |her )?(?:written |express |"
+    r"full |signed )?(?:consent|permission)|used with permission|consented to (?:share|publish|"
+    r"this)|names? (?:and (?:identifying )?details )?(?:have been |has been |were )?changed|"
+    r"dramati[sz]ation|fictional|composite (?:character|story))",
     re.I)
+# A structured testimonial states consent as a field, not a sentence.
+CONSENT_FIELD = re.compile(
+    r'"consent(?:_given|ed|_status)?"\s*:\s*(?:true|"(?:yes|given|written|signed|granted|'
+    r'obtained|on file)[^"]*")', re.I)
+BLOCK_OPEN = re.compile(r"<(p|li|blockquote|td|tr|dd|figcaption|figure|address|div|section|"
+                        r"article|footer)\b[^>]*>", re.I)
+# The elements that are one record: a consent note in a sibling cell of the same
+# row, or in the caption of the same figure, belongs to that record.
+RECORD_TAGS = {"p", "li", "blockquote", "td", "tr", "dd", "figcaption", "figure", "article"}
+ORG_SCHEMA = re.compile(
+    r'"@type"\s*:\s*"(?:Organization|MedicalOrganization|Hospital|MedicalClinic|LocalBusiness|'
+    r'Pharmacy|DiagnosticLab|MedicalBusiness|NGO|Corporation)"')
+TAG = re.compile(r"<[^>]+>")
+WHITESPACE = re.compile(r"\s+")
 RESERVED_DOMAINS = (".example", ".test", ".invalid", ".localhost",
                     "example.com", "example.net", "example.org")
 RESERVED_NETS = [ipaddress.ip_network(n) for n in
@@ -75,12 +91,12 @@ def provider_staff_page(record: Record) -> str | None:
 def public_health_article(record: Record) -> str | None:
     if not record.names or PATIENT_CUE.search(record.text):
         return None
+    # Only a byline is evidence. "A health topic with no patient cue" is not:
+    # most real leaks name a person and a condition with no cue word at all.
     for name in record.names:
         before = record.text[:max(record.text.find(name), 0)]
         if BYLINE.search(before[-40:]):
-            return f"the named person is the article's byline, not a patient"
-    if record.health and not record.direct_ids:
-        return "a health topic with no person in a patient role"
+            return "the named person is the article's byline, not a patient"
     return None
 
 
@@ -134,6 +150,12 @@ def company_contact(record: Record) -> str | None:
     if (footer or CONTACT_PATH.search(record.path)) and ORG_WORD.search(record.text) \
             and (ROLE_MAILBOX.search(record.text) or not record.names):
         return "the organisation's own contact block"
+    if ORG_SCHEMA.search(record.text):
+        return "schema.org markup describing an organisation"
+    if any(tag == "address" for tag, _, _ in containing_blocks(record)) and not record.names:
+        return "an <address> block with no person in it"
+    if ORG_WORD.search(record.text) and ROLE_MAILBOX.search(record.text) and not record.names:
+        return "an organisation's name beside its role mailbox"
     return None
 
 
@@ -152,9 +174,48 @@ def own_record(record: Record) -> str | None:
     return None
 
 
+def _plain(markup: str) -> str:
+    return WHITESPACE.sub(" ", html.unescape(TAG.sub(" ", markup))).strip()
+
+
+def containing_blocks(record: Record) -> list[tuple[str, str, str]]:
+    """(tag, text, note) for every block element on the page that holds the
+    record, nested ones included. Text extraction splits at every tag, so a
+    consent note in an <em>, or in the next cell of the same table row, arrives
+    as a separate run; the record is the paragraph or the row, not the run.
+
+    note is the short text right after the element closes, before the next
+    block starts: a "<small>Fictional account</small>" under a figure is the
+    figure's caption in all but markup."""
+    needle = WHITESPACE.sub(" ", record.text).strip()
+    found = []
+    if not needle:
+        return found
+    for opening in BLOCK_OPEN.finditer(record.page):
+        tag = opening.group(1).lower()
+        closing = re.compile(rf"</{tag}\s*>", re.I).search(record.page, opening.end())
+        if closing is None:
+            continue
+        text = _plain(record.page[opening.end():closing.start()])
+        if needle in text:
+            following = record.page[closing.end():closing.end() + 400]
+            next_block = BLOCK_OPEN.search(following)
+            note = _plain(following[:next_block.start()] if next_block else following)[:120]
+            found.append((tag, text, note))
+    return found
+
+
 def consented_testimonial(record: Record) -> str | None:
-    match = CONSENT.search(record.text)
-    return f'a visible consent marker: "{match.group(0)}"' if match else None
+    field = CONSENT_FIELD.search(record.text)
+    if field:
+        return f"a consent field in the record: {field.group(0)}"
+    for tag, text, note in [("record", record.text, "")] + containing_blocks(record):
+        if tag not in RECORD_TAGS and tag != "record":
+            continue
+        match = CONSENT.search(text) or CONSENT.search(note)
+        if match:
+            return f'a visible consent marker: "{match.group(0)}"'
+    return None
 
 
 PREDICATES = {

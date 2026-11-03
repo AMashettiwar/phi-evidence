@@ -735,7 +735,9 @@ document.cookie = "checkin=" + encodeURIComponent("{cookie_js['name']}|{cookie_j
 <li><a href="/files/discharge-template.docx">Discharge template</a></li>
 <li><a href="/files/grand-rounds.pptx">Grand rounds slides</a></li>
 <li><a href="/files/wound-photo.jpg">Photo guidance</a></li>
-</ul></body></html>""")
+</ul>
+<script>fetch("/api/v2/feedback", {method: "POST", body: "page=resources"});</script>
+</body></html>""")
 
     # ------------------------------------------------- negative predicates
     # policy/negatives.yaml names a fixture for each; these are the four the

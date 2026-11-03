@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "pylibs"))
 
 from phi_scan.collect import collect  # noqa: E402
-from phi_scan.detect import detect  # noqa: E402
+from phi_scan.clinical import _model as clinical_model  # noqa: E402
+from phi_scan.detect import _load_model, detect  # noqa: E402
 
 WORLD = ROOT / "fixtures" / "world"
 OUT = ROOT / "artifacts" / "g9"
@@ -38,6 +39,13 @@ def main() -> int:
         shutil.copytree(WORLD, source / f"copy_{index:03d}")
 
     total_files = sum(1 for _ in source.rglob("*") if _.is_file())
+
+    # The two NER models are a fixed cost paid once, not memory that grows with
+    # the input; load them before measuring, so the budget is about scanning.
+    started = time.time()
+    _load_model()
+    clinical_model()
+    print(f"models loaded        {time.time() - started:.1f}s (not in the memory budget)")
 
     tracemalloc.start()
     started = time.time()

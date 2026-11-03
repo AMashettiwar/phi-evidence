@@ -23,8 +23,10 @@ GATES = [
     ["tools/check_collect.py"],
     ["tools/gate_g2.py"],
     ["tools/check_detect.py"],
+    ["tools/gate_g3.py"],
     ["fixtures/build_injection.py"],
     ["tools/check_ai.py"],
+    ["tools/gate_g4.py"],
     ["tools/check_crawl.py"],
     ["tools/check_scale.py"],
     ["tools/lint_policy.py"],
@@ -35,6 +37,10 @@ GATES = [
     ["tools/check_context.py"],
     ["tools/check_emit.py"],
     ["tools/check_no_exam_content.py"],
+    ["tools/gate_g6.py"],
+    # Last: the acceptance table over the frozen corpus. Without GROQ_API_KEY
+    # the rules+LLM criterion is undecidable, and this gate says so and fails.
+    ["tools/gate_g5.py"],
 ]
 
 

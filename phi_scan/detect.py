@@ -29,7 +29,11 @@ import re
 import urllib.parse
 from pathlib import Path
 
-from .lexicon import NAME_STOP, health_hits, suppression_reason
+from .clinical import health
+from .negatives import PREDICATES, Record
+from .normalize import normalize
+from .validators import mbi_valid
+from .lexicon import NAME_STOP, suppression_reason
 from .severity import HIGH_CARRIERS, WITHHOLD_CARRIERS, audience, decide
 
 # Labels that mean "definitely not a person". Used to veto regex candidates:
@@ -52,6 +56,8 @@ ORG_KEYWORDS = (
 _NLP = None
 # The scan's vault key, set by detect(); digest() tokenises values with it.
 _TOKEN_KEY = b""
+# Record-number shapes learned from this scan's labelled ids, set by detect().
+_SHAPES: list[re.Pattern] = []
 _NLP_LOADED = False
 
 # The model dominates the runtime, and the same strings recur constantly across
@@ -100,7 +106,14 @@ from .vault import Vault
 # non-breaking spaces: "Emeka\u200b Delgado" is still one person and a plain
 # \s+ misses it entirely.
 SEP = r"[\s\u200b\u200c\u200d\u2060\ufeff]+"
-MRN = re.compile(r"(?<![A-Za-z0-9])MRN[-\s]?\d{3}[\s-]?\d{3,}\b", re.I)
+# "MRN-881781", "MRN: 00901453", "MR# 1234567", "Medical Record #: 2299586".
+MRN = re.compile(r"(?<![A-Za-z0-9])(?:MRN[-\s:#]*|MR#\s*|Medical\s+Record\s*(?:#|No\.?|Number)?"
+                 r"\s*[:#]?\s*)\d{3}[\s-]?\d{3,}\b", re.I)
+# Medicare Beneficiary Identifier, by CMS position rules; validated, and only
+# beside a label, because an unlabelled 11-character code is often a product code.
+MBI = re.compile(r"\b[1-9][AC-HJKMNP-RT-Y][AC-HJKMNP-RT-Y0-9]\d-?[AC-HJKMNP-RT-Y]"
+                 r"[AC-HJKMNP-RT-Y0-9]\d-?[AC-HJKMNP-RT-Y]{2}\d{2}\b")
+MBI_LABEL = re.compile(r"(?:MBI|medicare|member[\s_-]*(?:id|no|number)?|beneficiary)\W{0,6}$", re.I)
 SSN = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
 DOB = re.compile(r"\b(?:19|20)\d{2}-\d{2}-\d{2}\b")
 # Real records write dates in every shape there is. A detector that only knows
@@ -168,7 +181,7 @@ TEST_IP = ("192.0.2.", "198.51.100.", "203.0.113.")
 # change the ladder and one place to test it.
 
 # When the same value appears under two labels, keep the more specific one.
-CARRIER_RANK = {"page_text": 0, "inline_script": 1}
+CARRIER_RANK = {"page_text": 0, "inline_script": 1, "downloadable_file": 2}
 DEFAULT_RANK = 5
 
 
@@ -589,7 +602,20 @@ def identifiers_from_record(text: str) -> dict:
                                                    "accession", "name", "provider")),
         "identity": bool(keys),
         "labelled": True,
+        "names": [_clean_name(v) for v in _raw_values(text, "name")],
+        "ids": [v for label in ("ssn", "mrn", "member", "accession")
+                for v in _raw_values(text, label)],
     }
+
+
+def _raw_values(text: str, label: str) -> list[str]:
+    """The values of one field exactly as written, without the name variants."""
+    out = []
+    for line in text.splitlines():
+        key, _, raw = line.partition("=")
+        if key.strip().lower() == label and raw.strip():
+            out.append(raw.strip())
+    return out
 
 
 def identifiers(text: str, allow_names: bool = True) -> dict:
@@ -629,6 +655,12 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     for record in key_records:
         if record not in mrns:
             mrns.append(record)
+    # A token with the shape this site's labelled ids have is one of them, even
+    # where nobody labelled it.
+    for shape in _SHAPES:
+        for match in shape.finditer(text):
+            if match.group(0) not in mrns:
+                mrns.append(match.group(0))
 
     # A bare 6-8 digit run beside a named person is a record number. Without a
     # name in the same record it could be a date, a code or a measurement, and
@@ -642,6 +674,8 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
             mrns.append(value)
 
     ssns = [m.group(0) for m in SSN.finditer(text) if ssn_valid(m.group(0))]
+    plans = [m.group(0) for m in MBI.finditer(text) if mbi_valid(m.group(0))
+             and MBI_LABEL.search(text[max(0, m.start() - 30):m.start()])]
     dobs = [m.group(0) for m in DOB.finditer(text)]
     seen_dates = set(dobs)
     for pattern in (DATE_US, DATE_MONTH, DATE_COMPACT, DATETIME):
@@ -664,6 +698,8 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         keys.append("mrn")
     if ssns:
         keys.append("ssn")
+    if plans:
+        keys.append("plan_id")
     if dobs:
         keys.append("dates")
     if phones:
@@ -676,7 +712,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         keys.append("geo")
 
     primary = ""
-    for pool in (ssns, mrns, names, dobs, phones, emails, zips, ips):
+    for pool in (ssns, mrns, plans, names, dobs, phones, emails, zips, ips):
         if pool:
             primary = pool[0]
             break
@@ -686,16 +722,20 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         "primary": primary,
         # Every identifier found in the record, so a downstream check can ask
         # "was this value seen here?" without the finding storing any of them.
-        "values": [v for pool in (ssns, mrns, names, dobs, phones, emails, zips, ips)
+        "values": [v for pool in (ssns, mrns, plans, names, dobs, phones, emails, zips, ips)
                    for v in pool] + extended_identifiers(text),
-        "always": bool(ssns or mrns),
-        "strong": bool(names or mrns or ssns),
-        "identity": bool(names or mrns or ssns or dobs or phones or zips),
+        "always": bool(ssns or mrns or plans),
+        "strong": bool(names or mrns or ssns or plans),
+        "identity": bool(names or mrns or ssns or plans or dobs or phones or zips),
+        # For entity resolution only; detect() tokenises them and drops the text.
+        "names": names,
+        "ids": ssns + mrns,
     }
 
 
 JWT = re.compile(r"^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$")
 PERCENT = re.compile(r"%[0-9A-Fa-f]{2}")
+SQL_DDL = re.compile(r"^\s*(?:CREATE|ALTER|DROP|GRANT|REVOKE|SET|USE|BEGIN|COMMIT|LOCK|UNLOCK)\b", re.I)
 
 
 STREET = re.compile(
@@ -800,13 +840,18 @@ def decode_blob(text: str) -> str | None:
     return decoded
 
 
+LINK_KEYS = ("patient_id", "patientId", "subject_id", "subjectId", "person_id")
+
+
 def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple[int, str]]:
     """Split a span into records, returning (offset within the span, text).
 
     An offset of -1 means "work it out later". That happens for JSON, where the
     serialised object does not appear verbatim in the source.
     """
-    if derivation == "pdf_text":
+    # Rendered page text has one line per block element: each line is a record,
+    # or a contact paragraph would link to a clinical paragraph further down.
+    if derivation in ("pdf_text", "rendered_text"):
         units: list[tuple[int, str]] = []
         offset = 0
         for line in text.splitlines(keepends=True):
@@ -823,7 +868,9 @@ def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple
         offset = 0
         for line in text.splitlines(keepends=True):
             body = line.rstrip("\r\n")
-            if body.strip() and not body.lstrip().startswith("--"):
+            # A schema statement describes columns, not people: "name TEXT" is a
+            # column definition, and reading it as a person was a false alarm.
+            if body.strip() and not body.lstrip().startswith("--") and not SQL_DDL.match(body):
                 sql_units.append((offset, body))
             offset += len(line)
         return sql_units or [(0, text)]
@@ -876,6 +923,23 @@ def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple
             return [(0, text)]
         collected: list[tuple[int, str]] = []
 
+        # An object that points at another by id ("patient_id": "p1") is joined
+        # to it, as a FHIR Condition is joined to its Patient. Only objects that
+        # carry identity can be the target; a dangling id joins nothing.
+        by_id: dict[str, dict] = {}
+
+        def index(node: object) -> None:
+            if isinstance(node, dict):
+                if isinstance(node.get("id"), (str, int)) and any(_key_identifiers(node)):
+                    by_id.setdefault(str(node["id"]), node)
+                for value in node.values():
+                    index(value)
+            elif isinstance(node, list):
+                for item in node:
+                    index(item)
+
+        index(payload)
+
         def walk(node: object) -> None:
             if isinstance(node, dict):
                 scalars = [v for v in node.values() if isinstance(v, (str, int, float))]
@@ -883,7 +947,12 @@ def units_for(carrier: str, path: str, text: str, derivation: str) -> list[tuple
                 # record. Keeping it would produce one finding spanning the whole
                 # file and hide the per-record findings underneath it.
                 if scalars:
-                    collected.append((-1, json.dumps(node)))
+                    target = next((by_id[str(node[key])] for key in LINK_KEYS
+                                   if isinstance(node.get(key), (str, int))
+                                   and str(node[key]) in by_id
+                                   and by_id[str(node[key])] is not node), None)
+                    collected.append((-1, json.dumps(node) if target is None
+                                      else json.dumps(target) + " " + json.dumps(node)))
                 for value in node.values():
                     walk(value)
             elif isinstance(node, list):
@@ -929,14 +998,169 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
     if decoded is not None:
         return decoded, digest(text)
     if row["carrier"] in ("url", "page_link", "third_party") or PERCENT.search(text):
-        # "Jane%20Doe" is a name, in a URL or a log.
-        return urllib.parse.unquote(text), digest(text)
+        # "Jane%20Doe" is a name, in a URL or a log; in a query string, so is
+        # "John+Gonzales": form encoding writes a space as "+".
+        decode = urllib.parse.unquote_plus if "=" in text else urllib.parse.unquote
+        return decode(text), digest(text)
     return text, None
+
+
+MEASURED_AUDIENCE = {"public": "public", "authenticated": "authenticated",
+                     "authenticated_other": "authenticated"}
+# Order matters only for which reason is reported; any one clears the record.
+CLEARING_ORDER = ("own_record", "consented_testimonial", "provider_staff_page",
+                  "public_health_article", "company_contact", "code_reference",
+                  "group_statistics")
+
+
+def _record_id(text: str) -> str | None:
+    """The id of a JSON record, if the text is one."""
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(payload, dict):
+        for key in ("id", "patient_id", "patientId"):
+            if isinstance(payload.get(key), (str, int)):
+                return str(payload[key])
+    return None
+
+
+def _cleared_by(record: Record, always: bool) -> tuple[str, str] | None:
+    """The first do-not-flag predicate with evidence for this record.
+
+    An always-flag identifier (SSN, MRN, plan id) is never cleared, except as
+    the scanning account's own record: that is the tester's own data.
+    """
+    for name in CLEARING_ORDER:
+        if always and name != "own_record":
+            continue
+        evidence = PREDICATES[name](record)
+        if evidence:
+            return name, evidence
+    return None
+
+
+def _learn_shapes(texts) -> list[re.Pattern]:
+    """Record-number shapes a site uses, learned from its own labelled ids.
+
+    "MRN AAA123456789" teaches AAA999999999; the same shape without a label
+    elsewhere is then a record number too. Two distinct labelled values are
+    needed so a one-off code is not generalised, and the shape must be long and
+    digit-heavy enough that it cannot match ordinary words or years.
+    """
+    seen: dict[str, set[str]] = {}
+    for text in texts:
+        for value in _labelled_ids(text):
+            shape = "".join("A" if ch.isalpha() else "9" if ch.isdigit() else ch
+                            for ch in value)
+            seen.setdefault(shape, set()).add(value)
+    patterns = []
+    for shape in sorted(seen):
+        if (len(seen[shape]) >= 2 and len(shape) >= 8
+                and any(ch == "A" for ch in shape) and shape.count("9") >= 5):
+            body = "".join("[A-Za-z]" if ch == "A" else r"\d" if ch == "9" else re.escape(ch)
+                           for ch in shape)
+            patterns.append(re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])"))
+    return patterns
+
+
+HONORIFICS = {"mr", "mrs", "ms", "miss", "dr", "prof", "sir", "dame"}
+
+
+def _name_key(name: str) -> str | None:
+    """A token for last name plus first initial, so "J. Smith" is "John Smith"."""
+    words = re.findall(WORD, name)
+    while words and words[0].lower() in HONORIFICS and len(words) > 1:
+        words = words[1:]
+    if not words:
+        return None
+    if len(words) == 1:
+        return digest("name\0" + words[0].lower())
+    first, last = (words[1], words[0]) if "," in name else (words[0], words[-1])
+    return digest(f"name\0{last.lower()}\0{first[0].lower()}")
+
+
+def _resolve_people(findings: list[dict]) -> None:
+    """Label findings that refer to the same person, then drop the working keys.
+
+    Union-find over name tokens and record-number/SSN tokens: a record holding
+    a name and an MRN ties them together, so the same MRN under another spelling
+    of the name is still one person. Only tokens are held, never a name.
+    """
+    parent: dict[str, str] = {}
+
+    def find(token: str) -> str:
+        parent.setdefault(token, token)
+        while parent[token] != token:
+            parent[token] = parent[parent[token]]
+            token = parent[token]
+        return token
+
+    for finding in findings:
+        tokens = finding["_ids"] + (finding["_names"] if finding["_ids"] else [])
+        for token in tokens[1:]:
+            parent[find(token)] = find(tokens[0])
+    labels: dict[str, str] = {}
+    for finding in findings:
+        keys = finding.pop("_ids") + finding.pop("_names")
+        root = find(keys[0]) if keys else f"alone{len(labels)}"
+        finding["person"] = labels.setdefault(root, f"p{len(labels) + 1:03d}")
+
+
+# Quasi-identifiers (Sweeney 2000: ZIP + birth date + sex single out most people).
+# No census table is bundled, so k is not estimated; the three-field rule stands
+# in for k < 11.
+QUASI_ZIP = re.compile(r"(?i:\bzip(?:[\s_-]*code)?\W{0,4})(\d{5})\b|\b[A-Z]{2}\s+(\d{5})\b")
+QUASI_DOB_LABEL = re.compile(r"\b(?:dob|date[\s_-]*of[\s_-]*birth|birth[\s_-]*date|born)\W{0,4}", re.I)
+QUASI_SEX = re.compile(r"\b(?:sex|gender)\W{0,4}(?:female|male|woman|man|f|m)\b", re.I)
+
+
+def _quasi_zip(text: str) -> str | None:
+    """The ZIP of a record that has all three quasi-identifiers, else None."""
+    zipped = QUASI_ZIP.search(text)
+    if not zipped or not QUASI_SEX.search(text):
+        return None
+    for label in QUASI_DOB_LABEL.finditer(text):
+        if any(p.match(text, label.end()) for p in (DOB, DATE_US, DATE_MONTH)):
+            return zipped.group(1) or zipped.group(2)
+    return None
+
+
+HEX64 = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+
+
+def _hashed_forms(texts) -> dict[str, tuple[str, str]]:
+    """SHA-256 of every email and phone seen, as trackers send them.
+
+    Trackers hash a lowercased, trimmed email or a digits-only phone (with or
+    without the country code 1) instead of sending the value. Plain SHA-256 is
+    held in memory for this comparison only and is never written anywhere.
+    """
+    forms: dict[str, tuple[str, str]] = {}
+
+    def add(kind: str, plain: str, normalised: str) -> None:
+        forms[hashlib.sha256(normalised.encode("utf-8")).hexdigest()] = (kind, plain)
+
+    for text in texts:
+        for match in EMAIL.finditer(text):
+            add("email", match.group(0), match.group(0).strip().lower())
+        for match in PHONE.finditer(text):
+            digits = re.sub(r"\D", "", match.group(0))
+            if len(digits) == 11 and digits[0] == "1":
+                digits = digits[1:]
+            if len(digits) == 10:
+                add("phone", match.group(0), digits)
+                add("phone", match.group(0), "1" + digits)
+    return forms
 
 
 def detect(index_path: Path, vault_root: Path,
            auth_prefixes: tuple[str, ...] = (),
-           context: str = "covered-entity") -> list[dict]:
+           context: str = "covered-entity",
+           measured: dict[str, str] | None = None,
+           own_ids: frozenset[str] = frozenset(),
+           cleared: list[dict] | None = None) -> list[dict]:
     """Decide findings.
 
     context decides the test, not the severity:
@@ -947,22 +1171,27 @@ def detect(index_path: Path, vault_root: Path,
                       45 CFR 164.514(b)(2)(i).
       public-web      identity plus a health fact. A page naming a doctor is not
                       an exposure; a page naming a patient and a diagnosis is.
+
+    measured: audience per path from a live capture (public, authenticated,
+    authenticated_other, authenticated_self). It overrides auth_prefixes,
+    which is only the operator's declaration (spec 2.2: measured, not assumed).
+    own_ids: the scanning account's record ids, for a static scan of its data.
+    cleared: if given, receives every record a do-not-flag predicate cleared,
+    with the evidence for clearing it (policy/negatives.yaml).
     """
     if context not in ("covered-entity", "public-web"):
         raise ValueError(f"unknown context: {context}")
     covered = context == "covered-entity"
     vault = Vault(vault_root)
-    global _TOKEN_KEY
+    global _TOKEN_KEY, _SHAPES
     _TOKEN_KEY = vault.key
+    _SHAPES = []
     rows = [json.loads(line) for line in
             Path(index_path).read_text(encoding="utf-8").splitlines() if line]
 
-    # First pass: cache each span's text, and note which files are clinical at
-    # all. A name sitting in the metadata of a lab report belongs to that
-    # report, even though the metadata itself says nothing about health.
+    # First pass: cache each span's text.
     texts: dict[str, str] = {}
     encoded_hash: dict[str, str | None] = {}
-    health_by_path: dict[str, bool] = {}
     for row in rows:
         got = _span_text(row, vault)
         if got is None:
@@ -970,19 +1199,51 @@ def detect(index_path: Path, vault_root: Path,
         text, encoded = got
         texts[row["obs_id"]] = text
         encoded_hash[row["obs_id"]] = encoded
-        if health_hits(text)[0]:
-            health_by_path[row["path"]] = True
+    _SHAPES = _learn_shapes(texts.values())
+
+    # Is a file clinical at all? A name in the metadata of a lab report belongs
+    # to that report, though the metadata itself says nothing about health.
+    # Asked only for files with such a record: running the clinical model over
+    # every row of every file just in case was most of detection's time.
+    health_by_path: dict[str, bool] = {}
+
+    def clinical(path: str) -> bool:
+        if path not in health_by_path:
+            health_by_path[path] = any(health(texts[r["obs_id"]])[0] for r in rows
+                                       if r["path"] == path and r["obs_id"] in texts
+                                       and r["carrier"] != "file_metadata")
+        return health_by_path[path]
 
     # Every identifier present anywhere in a document belongs to that document's
     # exposure. A finding pointing at one paragraph still exposes the phone
     # number in the next one, and a reviewer asking "was this value here?"
     # deserves an answer.
     file_values: dict[str, set[str]] = {}
+    pages: dict[str, str] = {}
+    raw_seen: set[str] = set()
     for path in {row["path"] for row in rows}:
         joined = "\n".join(texts[row["obs_id"]] for row in rows
                            if row["path"] == path and row["obs_id"] in texts)
         found = identifiers(joined)
         file_values[path] = set(found["values"]) | set(extended_identifiers(joined))
+        pages[path] = joined
+
+    # The predicates read the page as served: block elements, JSON-LD markup, a
+    # footer. Every row collected with no derivation points into the raw file.
+    for row in rows:
+        if row["derivation"] == "raw" and row["path"] in pages and row["path"] not in raw_seen:
+            raw_seen.add(row["path"])
+            raw = vault.get(row["doc"])
+            if len(raw) < 2_000_000:
+                pages[row["path"]] = raw.decode("utf-8", "replace")
+
+    # The scanning account's own record: labelled by the identity oracle, or a
+    # record whose id is the account's own. Its values are not findings anywhere.
+    own_values: set[str] = set()
+    for path, page in pages.items():
+        if (measured or {}).get(path) == "authenticated_self" or (
+                own_ids and _record_id(page) in own_ids):
+            own_values |= file_values[path]
 
     findings: list[dict] = []
     for row in rows:
@@ -990,8 +1251,8 @@ def detect(index_path: Path, vault_root: Path,
         if text is None:
             continue
 
-        clinical_file = health_by_path.get(row["path"], False)
-        aud = audience(row["path"], auth_prefixes)
+        aud = MEASURED_AUDIENCE.get((measured or {}).get(row["path"], ""),
+                                    audience(row["path"], auth_prefixes))
         cursor = 0
         for unit_offset, unit in units_for(row["carrier"], row["path"], text, row["derivation"]):
             # Minified bundles are marked at collection time; name detection on
@@ -1001,8 +1262,11 @@ def detect(index_path: Path, vault_root: Path,
             # rule stays narrow.
             allow_names = not row["extraction"].startswith("minified")
             labelled = row["extraction"] == "labelled_record"
-            ids = (identifiers_from_record(unit) if labelled
-                   else identifiers(unit, allow_names=allow_names))
+            # Detection reads the record with its disguises undone; the
+            # evidence still points at the bytes as stored.
+            seen = normalize(unit)
+            ids = (identifiers_from_record(seen) if labelled
+                   else identifiers(seen, allow_names=allow_names))
 
             # A long number in a filename is a record number until proven
             # otherwise: "chart_2024_0012345.txt" is a patient identifier that
@@ -1021,9 +1285,34 @@ def detect(index_path: Path, vault_root: Path,
             if suppression_reason(unit):
                 continue
 
-            has_health, tags = health_hits(unit)
+            # No name, record number, SSN or plan id, yet ZIP + birth date + sex
+            # is enough to single most people out.
+            quasi = None if ids["strong"] else _quasi_zip(seen)
+            if quasi is not None:
+                position = text.find(quasi, cursor)
+                if encoded_hash.get(row["obs_id"]) is not None or position < 0:
+                    offset, length = row["offset"], row["length"]
+                else:
+                    cursor = position + len(quasi)
+                    offset, length = row["offset"] + position, len(quasi)
+                findings.append({
+                    "path": row["path"], "carrier": row["carrier"],
+                    "obs_id": row["obs_id"], "doc": row["doc"],
+                    "offset": offset, "length": length,
+                    "context_offset": row["offset"], "context_length": row["length"],
+                    "value_hashes": [digest(quasi)],
+                    "extraction": "quasi_identifier",
+                    "evidence_grade": row["grade"],
+                    "identifiers": ["quasi_identifiers"], "sensitive": [],
+                    "level": "review", "rules": rules_for(row["carrier"], []),
+                    "value_mask": mask(quasi), "value_hash": digest(quasi),
+                    "_names": [], "_ids": [],
+                })
+                continue
+
+            has_health, tags = health(seen)
             context_health = False
-            if row["carrier"] == "file_metadata" and clinical_file and not has_health:
+            if row["carrier"] == "file_metadata" and not has_health and clinical(row["path"]):
                 # The health context comes from the file, not from this field.
                 has_health = True
                 context_health = True
@@ -1052,6 +1341,19 @@ def detect(index_path: Path, vault_root: Path,
                 elif row["carrier"] in WITHHOLD_CARRIERS and ids["strong"] and has_health:
                     take = True
             if not take:
+                continue
+
+            names = find_names(unit) if "names" in ids["keys"] else []
+            record = Record(text=unit, page=pages.get(row["path"], ""), path=row["path"],
+                            names=names, health=has_health,
+                            direct_ids=[v for v in ids["values"] if v not in names],
+                            own_values=own_values)
+            reason = _cleared_by(record, always=ids["always"])
+            if reason is not None:
+                if cleared is not None:
+                    cleared.append({"path": row["path"], "carrier": row["carrier"],
+                                    "predicate": reason[0], "evidence": reason[1],
+                                    "value_mask": mask(ids["primary"])})
                 continue
 
             # Evidence points at the exact bytes of the value, not at "somewhere
@@ -1100,6 +1402,33 @@ def detect(index_path: Path, vault_root: Path,
                 "rules": rules_for(row["carrier"], tags),
                 "value_mask": mask(ids["primary"]),
                 "value_hash": digest(ids["primary"]),
+                # Working keys for entity resolution; removed before returning.
+                "_names": [k for k in (_name_key(n) for n in ids.get("names", []))
+                           if k],
+                "_ids": [digest(v) for v in ids.get("ids", [])],
+            })
+
+    # Trackers send the SHA-256 of an email or phone instead of the value.
+    outbound = [row for row in rows if row["carrier"] in ("third_party", "url")
+                and row["obs_id"] in texts]
+    forms = _hashed_forms(texts.values()) if outbound else {}
+    for row in outbound:
+        for match in HEX64.finditer(texts[row["obs_id"]].lower()):
+            if match.group(0) not in forms:
+                continue
+            kind, plain = forms[match.group(0)]
+            findings.append({
+                "path": row["path"], "carrier": row["carrier"],
+                "obs_id": row["obs_id"], "doc": row["doc"],
+                "offset": row["offset"], "length": row["length"],
+                "context_offset": row["offset"], "context_length": row["length"],
+                "value_hashes": [digest(plain)],
+                "extraction": "hashed_identifier",
+                "evidence_grade": row["grade"],
+                "identifiers": [kind], "sensitive": [], "level": "critical",
+                "rules": rules_for(row["carrier"], []),
+                "value_mask": mask(plain), "value_hash": digest(plain),
+                "_names": [], "_ids": [],
             })
 
     # Covered-entity: a document holding identifiers is reported even if no
@@ -1135,6 +1464,7 @@ def detect(index_path: Path, vault_root: Path,
                 "rules": rules_for(row["carrier"], []),
                 "value_mask": mask(sample),
                 "value_hash": digest(sample),
+                "_names": [], "_ids": [],
             })
 
     # One finding per file per value. Prefer the more specific carrier label,
@@ -1146,8 +1476,11 @@ def detect(index_path: Path, vault_root: Path,
         if current is None:
             best[slot] = finding
             continue
-        if (rank(finding["carrier"]), -finding["length"]) > (
-                rank(current["carrier"]), -current["length"]):
+        # Raw bytes beat rendered text: the same value, but an exact pointer.
+        if (rank(finding["carrier"]), finding["extraction"] != "rendered_text",
+                -finding["length"]) > (rank(current["carrier"]),
+                                       current["extraction"] != "rendered_text",
+                                       -current["length"]):
             best[slot] = finding
 
     # Never order by a token: tokens change with each scan's key, and the same
@@ -1157,6 +1490,8 @@ def detect(index_path: Path, vault_root: Path,
                                     f["length"], f["value_mask"]))
     for index, finding in enumerate(ordered, start=1):
         finding["finding_id"] = f"f{index:05d}"
+    # Labels follow the final order, so the same scan labels people the same way.
+    _resolve_people(ordered)
     return ordered
 
 
