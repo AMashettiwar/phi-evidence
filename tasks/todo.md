@@ -135,6 +135,9 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - owner chose "inspect and disclose" (2026-11-03): `eval/disclosures.md`. One template opened
   (N8.blockquote); consent needle now ignores spacing; held-out N8.blockquote 18 -> 0 flagged.
   N8's held-out number is a development number from here on; other held-out strata stay blind
+- run 7 (after that fix): 13/14. False alarms 0/720, precision 1.000, recall unchanged. Only
+  rules vs rules+LLM fails: b=3 c=0 (model moved 3 dev-split leaks to Review: S3-0017,
+  S4-0012, S4-0132). With rules at ceiling the model can only lose -> owner decision 2
 
 ### Launch without a terminal (2026-11-03)
 - [x] `install.bat` / `start.bat` -> `phi_scan/launcher.py`: a form on 127.0.0.1:8765 (token +
