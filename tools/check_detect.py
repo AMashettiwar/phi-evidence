@@ -17,6 +17,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "pylibs"))
@@ -182,7 +184,15 @@ def main() -> int:
     stable = json.dumps(again, sort_keys=True) == rendered
     print(f"detection deterministic    {stable}")
 
+    # --- invariant 3: no rule id outside the closed registry ----------------
+    rules = yaml.safe_load((ROOT / "policy" / "rules.yaml").read_text(encoding="utf-8"))
+    registry = {rule["id"] for rule in rules["rules"]}
+    unknown = sorted({rule for finding in findings for rule in finding["rules"]} - registry)
+    print(f"rule ids outside registry  {len(unknown)}  (must be 0)")
+
     failures: list[str] = []
+    if unknown:
+        failures.append(f"rule ids outside the registry: {unknown}")
     if missed:
         failures.append(f"{len(missed)} planted leaks missed")
     if leaked:

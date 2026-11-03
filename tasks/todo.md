@@ -37,20 +37,23 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 
 ## Milestones
 
-### M1 — reproducible baseline
-- [ ] `.venv` from Python 3.11; deps in `pyproject.toml` only, pinned, incl. `en_core_web_sm`
-- [ ] `_load_nlp` catches only the expected errors; gates print which name detector ran
-- [ ] reproduce the 5 CI failures without the model; confirm they vanish with it, or fix each with a test
-- [ ] `tools/run_gates.py` runs the whole TESTING.md list; CI calls it
-- **verify:** `python tools/run_gates.py` exit 0 in a fresh venv; with the model hidden it reports `regex` mode
+### M1 — reproducible baseline  (done, ace3184)
+- [x] `.venv` from Python 3.11; direct deps pinned in `pyproject.toml`, everything in `requirements.lock`
+- [x] missing model is an error, not a silent regex fallback (simpler than reporting a mode)
+- [x] root cause was not the model: `WORD` admitted `_`, so "Bhatt DEMO_PATIENT_MRN" beat
+      "Freya Bhatt" once en_core_web_sm 3.7.1 split the name. Fixed; `tests/test_names.py`
+- [x] `tools/run_gates.py` is the one gate list (added the missing `build_injection.py`); CI calls it
+- **verified:** fresh clone + fresh venv from the lock: 16/16 gates
 
 ### M2 — P0 policy spec (G0)
-- [ ] `policy/phi-exposure-spec.md` covering brief 2.1-2.9 (definition, finding model, record
-      boundaries, identifiability incl. QI / small-cell, negative predicates, severity calculus,
-      closed legal list incl. AHA v. Becerra, discovery protocol, invariants)
-- [ ] `rules.yaml` = the 11 ids, each quote verified against stored eCFR text
-- [ ] `identifiers.yaml` 18/18 with validator + mask + suppressible
-- [ ] every negative predicate names >=1 fixture
+- [x] `policy/phi-exposure-spec.md` covering brief 2.1-2.9
+- [x] `rules.yaml`: 12 ids = the brief's 11 citations ((b)(2)(i)/(ii) split), quotes linted
+- [x] `identifiers.yaml` 18/18 with check + mask + always_flag (ssn, mrn, plan_id)
+- [x] `policy/negatives.yaml`: 8 predicates, each with evidence, function, fixture (built in M3/M5)
+- [x] invariant 3 (no rule id outside registry) now enforced in `check_detect.py`, with a control
+- [ ] **owner decision open:** severity as the rulebook's ordinal "worst of" rule (implemented)
+      vs the brief's numeric weights. Spec 2.6 records it.
+- [ ] **pending human:** rulebook sign-off -> `policy/SIGNOFF.md`
 - **verify (G0):** `python tools/gate_g0.py` -> 11/11 rule ids resolve, 0 quote mismatches, 18/18 identifiers, 8/8 predicates with fixtures
 
 ### M3 — P1 frozen fixtures and key (G1)

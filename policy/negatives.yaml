@@ -1,0 +1,81 @@
+# The eight situations that are NOT findings (spec section 2.5, rulebook section 5).
+#
+# Each one needs evidence, not a hunch. `evidence` is the machine-checkable
+# condition; `implemented_by` is the function that decides it; `fixtures` are the
+# pages in the synthetic world that must stay clean because of it. A predicate
+# with no fixture is a claim nobody tested.
+
+meta:
+  count: 8
+  cited_from: "docs/brief/PROMPT-v2.md 2.5; docs/brief/rulebook.md section 5"
+
+predicates:
+  - id: provider_staff_page
+    situation: A doctor's or staff member's own profile.
+    evidence: >
+      Any of: the URL path is under a staff directory (doctors/, providers/, staff/,
+      team/); schema.org Physician markup on the page; an NPI that passes Luhn with
+      the 80840 prefix next to the name.
+    implemented_by: phi_scan.negatives:provider_staff_page
+    fixtures: [site/doctors/dr-okafor.html]
+
+  - id: public_health_article
+    situation: A general health article.
+    evidence: >
+      No person appears in a patient role in the same record: no patient cue
+      (patient, diagnosed with, my treatment, testimonial) bound to a name.
+    implemented_by: phi_scan.negatives:public_health_article
+    fixtures: [site/articles/managing-diabetes.html]
+
+  - id: group_statistics
+    situation: Numbers that describe a group.
+    evidence: >
+      The record states a count for a group, the count is at or above the
+      small-cell threshold, and no direct identifier is in the same record. Below
+      the threshold it becomes a review finding instead.
+    implemented_by: phi_scan.negatives:group_statistics
+    fixtures: [site/reports/annual-outcomes.html]
+
+  - id: reserved_synthetic_value
+    situation: Fake or sample data.
+    evidence: >
+      The value is reserved for testing: SSA-invalid SSN (area 000, 666, 900-999;
+      group 00; serial 0000); RFC 2606 domain (example.com/.net/.org, .test,
+      .example, .invalid, .localhost); RFC 5737 or RFC 3849 address; phone
+      555-0100 to 555-0199.
+    implemented_by: phi_scan.negatives:reserved_synthetic_value
+    fixtures: [site/forms/sample-intake.html]
+
+  - id: company_contact
+    situation: The organisation's own contact details.
+    evidence: >
+      The value sits in the site's contact block: the contact page or a footer
+      repeated on most pages, next to the organisation's name.
+    implemented_by: phi_scan.negatives:company_contact
+    fixtures: [site/contact.html]
+
+  - id: code_reference
+    situation: A medical code reference page.
+    evidence: >
+      ICD-10, CPT, or LOINC codes with their descriptions and no person attached
+      in the same record.
+    implemented_by: phi_scan.negatives:code_reference
+    fixtures: [site/billing/codes.html]
+
+  - id: own_record
+    situation: The test account's own record.
+    evidence: >
+      The record matches the provisioned account the scan is logged in as, by the
+      identity oracle (account A reading account A). Account A reading account B
+      is a finding.
+    implemented_by: phi_scan.negatives:own_record
+    fixtures: [api/patients/me-account-a.json]
+
+  - id: consented_testimonial
+    situation: A testimonial published with permission.
+    evidence: >
+      A consent or fiction marker is visible on the page in the same record
+      ("shared with permission", "names changed", "dramatisation"). Calling it a
+      testimonial is not evidence: without a visible marker it is a finding.
+    implemented_by: phi_scan.negatives:consented_testimonial
+    fixtures: [site/stories/with-consent.html]

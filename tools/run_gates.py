@@ -25,6 +25,7 @@ GATES = [
     ["tools/check_crawl.py"],
     ["tools/check_scale.py"],
     ["tools/lint_policy.py"],
+    ["tools/gate_g0.py"],
     ["fixtures/build_evasion.py"],
     ["tools/check_evasion.py"],
     ["fixtures/build_context.py"],

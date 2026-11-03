@@ -2,7 +2,7 @@
 #
 # "standalone" means: this item is a finding even when nothing about health sits
 # next to it. Anything not listed here is only a finding when a health detail
-# appears in the same record (see policy/spec.md section 3).
+# appears in the same record (see policy/phi-exposure-spec.md section 2.3).
 #
 # This file carries one direct instruction from the project owner: a street
 # address is a finding on its own. It is Medium, not Critical, because there is
