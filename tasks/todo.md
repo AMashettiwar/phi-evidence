@@ -168,7 +168,10 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - found on the way: pacing was counted from the send, the server measures arrival; G2 saw
   0.94 s between two requests once the request order changed -> also counted from the answer
 - **verify:** rescan of the same public pages: 0 findings (was 12), 44 requests (was 81),
-  finished without hitting the request cap; G2, G3, G6, check_* and 114 tests pass
+  finished without hitting the request cap; G2, G3, G6, check_* and 101 tests pass
+- G5 after the fixes: run 8 failed check_detect inside G5 only (passed alone 4 times; output
+  was discarded, so G5 now prints it on failure); run 9 13/14, every recall and precision
+  number unchanged, rules vs rules+LLM b=2 c=0
 - deviation: procedures and tests are recognised by medical word formation and a short noun list,
   British spellings folded; licensed SNOMED/CPT unavailable, public ICD-10-PCS not downloaded
 

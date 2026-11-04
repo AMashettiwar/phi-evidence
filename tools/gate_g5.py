@@ -58,6 +58,9 @@ def main() -> int:
     world = subprocess.run([sys.executable, str(ROOT / "tools" / "check_detect.py")], cwd=ROOT,
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
     world_ok = world.returncode == 0
+    if not world_ok:
+        # Run 8 failed here and passed alone three times; keep the reason.
+        print("check_detect failed:\n" + "\n".join((world.stdout + world.stderr).splitlines()[-30:]))
     rows.append(("Always-flag recall", f"{len(always) - len(always_missed)}/{len(always)} corpus, "
                  f"world {'clean' if world_ok else 'MISSES'}", not always_missed and world_ok))
     for stratum, s in rules["strata"].items():
