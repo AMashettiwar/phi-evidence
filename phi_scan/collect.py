@@ -384,8 +384,10 @@ def _collect_js(path: str, text: str, doc: str, sink: Sink) -> None:
     # observation from it, because name detection on mangled code produces
     # nonsense: the first real target yielded "New", "Test" and "rn(n". Bundlers
     # also split code into small chunks (a 7,800-character login view on one
-    # line), so size alone does not decide it.
-    minified = len(text) > 2_000 and text.count("\n") < max(1, len(text) // 500)
+    # line), so size alone does not decide it. Nor do newlines: React's
+    # production build has 322 of them, at 409 characters a line. People write
+    # lines under about 100 characters; 200 on average is generated code.
+    minified = len(text) > 2_000 and len(text) / (text.count("\n") + 1) > 200
     prefix = "minified_" if minified else ""
     sink.add(path, doc, 0, len(text), "js_bundle", f"{prefix}whole_file")
     for match in B64.finditer(text):

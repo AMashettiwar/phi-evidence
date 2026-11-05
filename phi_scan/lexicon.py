@@ -131,6 +131,12 @@ NAME_STOP: set[str] = {
     # title, was read as the person "Augusta Digital". None is a surname.
     "digital", "online", "mobile", "virtual", "portal", "analytics", "telehealth",
     "labs", "data", "web", "app", "viewer", "catalogue", "catalog",
+    # page and job headings a hospital site puts in title case: "Registered
+    # Nurse", "Clinical Trials", "Symptoms, Causes and Treatment"
+    "registered", "nurse", "nurses", "clinical", "trial", "trials", "symptoms",
+    "causes", "follow-up", "developers", "careers", "jobs", "events", "news",
+    "library", "stories", "hospitals", "doctors", "physicians", "providers",
+    "locations", "insurance", "billing", "privacy", "practices", "notice",
     # clinical phrasing that capitalises at sentence or heading start
     "invasive", "stage", "type", "chronic", "major", "relapsing", "multiple",
     "remitting", "antiretroviral", "therapy", "pathogenic", "variant",

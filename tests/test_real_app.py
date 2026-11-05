@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from phi_scan.collect import collect  # noqa: E402
-from phi_scan.detect import detect, digest, identifiers  # noqa: E402
+from phi_scan.detect import (detect, digest, identifiers, name_shaped,  # noqa: E402
+                             organisation_names, placeholder_number)
 from phi_scan.vault import Vault  # noqa: E402
 
 LEAK = "Rafael Ibarra, MRN 448812, started chemotherapy for breast cancer"
@@ -73,7 +74,7 @@ def test_department_names_are_not_people(tmp_path, monkeypatch):
     title = "<html><head><title>Harper Digital Pathology</title></head><body></body></html>"
     assert scan(tmp_path / "title", monkeypatch, {"index.html": title})[0] == []
     # A person before a department word is still a person.
-    assert "names" in identifiers("Jane Doe Oncology Report")["keys"]
+    assert "names" in identifiers("Rafael Ibarra Oncology Report")["keys"]
 
 
 def test_small_minified_chunk_is_code(tmp_path, monkeypatch):
@@ -90,8 +91,62 @@ def test_small_minified_chunk_is_code(tmp_path, monkeypatch):
 
 
 def test_repeated_digit_placeholder_is_not_a_record_number():
-    assert "mrn" not in identifiers("Jane Doe: enter the code 000000")["keys"]
-    assert "mrn" in identifiers("Jane Doe 4488127")["keys"]
+    assert "mrn" not in identifiers("Rafael Ibarra: enter the code 000000")["keys"]
+    assert "mrn" in identifiers("Rafael Ibarra 4488127")["keys"]
+
+
+# Rules from the realistic hospital site (fixtures/build_realsite.py,
+# tools/check_realsite.py). Each pairs what must stay quiet with what must not.
+
+def test_placeholders_are_not_people_or_records():
+    assert placeholder_number("123456789") and placeholder_number("987654")
+    assert not placeholder_number("4471829")
+    card = "Sample card. Member name: JOHN Q SAMPLE. Member ID: XYZ123456789. Group number: 000123."
+    assert identifiers(card)["keys"] == []
+    assert "mrn" in identifiers("Member name: Ellen Burke. Member ID: 4471829.")["keys"]
+
+
+def test_names_must_look_like_names():
+    assert not name_shaped('ia=!("undefined"===typeof window')
+    assert name_shaped("Mary-Jane O'Neil") and name_shaped("Maria de la Cruz") and name_shaped("José García")
+
+
+def test_lists_states_and_labels_are_not_names():
+    for text in ("Hospitals, Doctors and Care in Riverton, Ohio", "Member ID and Rx BIN", "FHIR API docs"):
+        assert identifiers(text)["names"] == [], text
+    assert identifiers("IBARRA, RAFAEL - pathology report")["names"]
+
+
+def test_organisation_name_repeated_on_the_page():
+    page = "Mercy Valley Health | Hospitals\nMercy Valley opens a cancer center\n© Mercy Valley Health"
+    assert "Mercy Valley" in organisation_names(page)
+    # Once is not enough: a leaked record names its patient once.
+    assert "Helen Marsh" not in organisation_names("Helen Marsh Health History: chemotherapy")
+
+
+def test_schema_org_things_are_not_people():
+    event = ('{"@type":"Event","name":"Diabetes support group",'
+             '"location":{"@type":"Place","name":"Community Room B"}}')
+    assert identifiers(event)["names"] == []
+    patient = '{"@type":"Patient","name":"Rosa Delgado","healthCondition":{"name":"breast cancer"}}'
+    assert identifiers(patient)["names"] == ["Rosa Delgado"]
+
+
+def test_code_names_need_a_record_beside_them():
+    comment = "// Core Schema: Parses YAML. const MAX = 4194304; // 2023-02-29"
+    assert identifiers(comment, code=True)["keys"] == ["dates"]
+    hardcoded = "const DEBUG = 'Ana Ruiz|MRN-880137|E11.9';"
+    assert {"names", "mrn"} <= set(identifiers(hardcoded, code=True)["keys"])
+
+
+def test_staff_named_on_the_page_but_never_a_patient(tmp_path, monkeypatch):
+    staff = ("<html><head><title>New cancer center</title></head><body><p>&ldquo;Care close to home "
+             "matters,&rdquo; said Marcus Webb, president and CEO. The center treats breast and lung "
+             "cancer.</p><p>Led by Dr. Lena Fischer.</p></body></html>")
+    assert scan(tmp_path, monkeypatch, {"news/center.html": staff})[0] == []
+    patient = staff.replace("</body>", "<p>Helen Marsh began chemotherapy for lung cancer "
+                                       "with Dr. Lena Fischer.</p></body>")
+    assert scan(tmp_path / "leak", monkeypatch, {"news/center.html": patient})[0]
 
 
 def test_evidence_points_at_the_value_after_non_ascii_text(tmp_path, monkeypatch):

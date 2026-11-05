@@ -60,7 +60,7 @@
     {
       "criterion": "rules vs rules+llm",
       "pass": false,
-      "value": "b=2 c=0 p=0.5000 delta=-2; UNDECIDED, needs ~12 discordant items"
+      "value": "b=3 c=0 p=0.2500 delta=-3; UNDECIDED, needs ~9 discordant items"
     },
     {
       "criterion": "LLM stability (Fleiss kappa, k=3)",
@@ -252,12 +252,12 @@
           "wilson_low": 0.9765538048284949
         },
         "S4_documents": {
-          "caught": 158,
+          "caught": 157,
           "heldout_recall": 1.0,
           "positives": 160,
-          "recall": 0.9875,
-          "wilson_high": 0.9965653288918735,
-          "wilson_low": 0.9555746308159091
+          "recall": 0.98125,
+          "wilson_high": 0.9936031492467405,
+          "wilson_low": 0.9463298879006856
         },
         "S5_always_flag": {
           "caught": 160,
@@ -287,11 +287,11 @@
       "pairs_needed_to_decide": null
     },
     "rules_vs_rules+llm": {
-      "delta_correct": -2,
-      "only_first_right": 2,
+      "delta_correct": -3,
+      "only_first_right": 3,
       "only_second_right": 0,
-      "p": 0.5,
-      "pairs_needed_to_decide": 12
+      "p": 0.25,
+      "pairs_needed_to_decide": 9
     }
   },
   "ledger": [
@@ -327,8 +327,18 @@
     },
     {
       "arm": "rules+llm",
+      "carrier": "exif",
+      "id": "S4-0108",
+      "kind": "miss",
+      "obfuscation": "none",
+      "reason": "no_finding",
+      "split": "dev",
+      "stratum": "S4_documents"
+    },
+    {
+      "arm": "rules+llm",
       "carrier": "document_metadata",
-      "id": "S4-0052",
+      "id": "S4-0159",
       "kind": "miss",
       "obfuscation": "none",
       "reason": "no_finding",

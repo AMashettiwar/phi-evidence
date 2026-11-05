@@ -204,3 +204,27 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 
 ## Review
 (filled in at the end)
+
+### Realistic hospital site (2026-11-04): false alarms before real sites find them
+- `fixtures/build_realsite.py`: doctor directory and bios (title, slug, JSON-LD, NPI), provider
+  API, sitemap of doctors, health article with author/reviewer, press release, trial listings,
+  job post, support-group event, sample insurance card, FHIR docs, privacy notice, WordPress
+  users endpoint, GTM/GA, plus 8 planted leaks in the same pages; `fixtures/thirdparty/` holds
+  seven real MIT-licensed vendor files used unmodified
+- first measurement: 26 false alarms, 1 miss. Root causes and fixes (each tested in
+  `tests/test_real_app.py`):
+  - title-case org names ("Mercy Valley") -> a run the page repeats before an org word is the org
+  - staff and authors (Dr., credentials, "Name, president and CEO", bylines, meta author,
+    JSON-LD author/organizer) -> N1/N2 evidence widened; every name needs it; patient cue blocks
+  - "Last, First" on "Riverton, Ohio" and "Hospitals, Doctors" -> states and lists rejected;
+    evidence now located for flipped names
+  - code: model fragments as names -> names must be name-shaped; in scripts and source maps a
+    name counts only beside a record id and bare numbers never do; minified = >200 chars/line
+  - JSON: "name" of a Place/Event/Organization/MedicalCondition is not a person; predicates now
+    judge the key-based names the decision used
+  - field labels "Member ID", "Rx BIN"; placeholders JOHN Q SAMPLE, 123456789; NCT ids
+  - dates/phones alone in title/meta/JSON-LD are the site's (hidden carriers keep the wider rule)
+  - miss: sitemap links are URL-decoded and "&dx=" counts as a diagnosis label
+- found on the way (pre-existing): "Rafael Ibarra Oncology Report" was tagged ORG and hid the name
+- **verify:** realsite 8/8, 0 false alarms; check_detect, G0, G1, G2 (gap 1.031 s), G3, G6,
+  evasion, context, emit, 108 tests; G5 13/14 with every recall and precision number unchanged

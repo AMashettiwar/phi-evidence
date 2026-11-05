@@ -41,7 +41,9 @@ TAGS = {
 TAG_PATTERNS = {tag: re.compile(pattern, re.I) for tag, pattern in TAGS.items()}
 # The model reads code as prose: in a stylesheet it called "@media" a disease and
 # "} }" a chemical. A mention must look like words to count.
-LABELLED_DX = re.compile(r"^dx=\S", re.M)
+# A diagnosis field: a structured record's "dx=" line, or a link's query
+# parameter ("confirm?patient=Walter+Briggs&dx=C61" in a real-looking sitemap).
+LABELLED_DX = re.compile(r"(?:^|[?&;])(?:dx|diagnosis|icd_?10|icd)=\w", re.M | re.I)
 # Procedures and tests. The disease/chemical model was trained on neither, so a
 # colonoscopy, a mastectomy or IVF was no health fact at all (independent
 # probes, tests/probes_prose.py). Medical word formation covers most procedures;

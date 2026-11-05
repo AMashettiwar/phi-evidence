@@ -17,6 +17,7 @@ fixtures/context/
 fixtures/evasion/
 fixtures/corpus/
 fixtures/out/
+fixtures/realsite/
 
 # scan output: contains hashes and offsets, and must never hold real PHI
 artifacts/

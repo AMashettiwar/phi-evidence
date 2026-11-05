@@ -125,7 +125,76 @@ DATE_MONTH = re.compile(
 DATE_COMPACT = re.compile(r"\b(?:19|20)\d{6}\b")
 # A bare 6-8 digit run is a record number when the same record names a person.
 # Ten digits is an NPI and five is a LOINC code, so both stay out.
-BARE_ID = re.compile(r"(?<![\d-])\d{6,8}(?![\d-])")
+# Not part of a longer token: "NCT05512345" is a ClinicalTrials.gov study id and
+# "XYZ123456789" a sample card's member id; neither is a bare number.
+BARE_ID = re.compile(r"(?<![\w-])\d{6,8}(?![\w-])")
+# Names that documentation uses for nobody in particular.
+PLACEHOLDER_NAME = re.compile(
+    r"\b(?:john|jane|richard|baby)\s+(?:q\.?\s+)?(?:doe|roe|public|sample|citizen)\b"
+    r"|\b(?:test|sample|demo|example|dummy)\s+(?:patient|person|user|member)\b", re.I)
+# Words that may sit around a person's name; anything else in a "name" (=, (, :,
+# <, quotes) means the model read code.
+NAME_PARTICLES = {"de", "del", "della", "der", "den", "di", "da", "dos", "du", "la", "le",
+                  "van", "von", "bin", "ibn", "al", "el", "y"}
+# What follows an organisation's own name: "Mercy Valley Health".
+ORG_SUFFIX = re.compile(
+    r"((?:[^\W\d_][\w'’-]*\s+){1,3}?)(?:Health|Hospitals?|Clinics?|Center|Centre|University|"
+    r"College|Foundation|Institute|Associates|Partners|Group|Network|Systems?|Pharmacy|Labs?)\b")
+
+
+def placeholder_number(value: str) -> bool:
+    """A form's example, not a record: one digit repeated (000000) or a straight
+    run (123456789, 987654)."""
+    digits = re.sub(r"\D", "", value)
+    if len(digits) < 5:
+        return False
+    steps = {int(b) - int(a) for a, b in zip(digits, digits[1:])}
+    return len(set(digits)) == 1 or steps in ({1}, {-1})
+
+
+def organisation_names(text: str) -> frozenset[str]:
+    """Word runs a page uses at least twice right before an organisation word,
+    in every trailing length: "Mercy Valley Health" in the title, header and
+    footer gives "Mercy Valley" and "Valley". Twice, because a site repeats its
+    own name on every page and a leaked record names a patient once."""
+    counts: dict[str, int] = {}
+    for match in ORG_SUFFIX.finditer(text):
+        words = match.group(1).split()
+        for i in range(len(words)):
+            phrase = " ".join(words[i:])
+            counts[phrase] = counts.get(phrase, 0) + 1
+    return frozenset(phrase for phrase, count in counts.items() if count >= 2)
+
+
+def keep_names(names: list[str], text: str, not_names: frozenset[str]) -> list[str]:
+    """Drop the page's organisation names and documentation placeholders."""
+    placeholders = [m.group(0).lower() for m in PLACEHOLDER_NAME.finditer(text)]
+    return [name for name in names if name not in not_names
+            and not any(name.lower() in p or p in name.lower() for p in placeholders)]
+
+
+def _locate(text: str, value: str, cursor: int) -> tuple[int, str]:
+    """Where a value sits in the text, and as what. A name read from "Ibarra,
+    Rafael" is stored as "Rafael Ibarra", which the text never contains, so the
+    evidence pointed at the start of the record instead of at the name."""
+    position = text.find(value, cursor)
+    if position < 0 and value.count(" ") == 1:
+        first, last = value.split()
+        written = f"{last}, {first}"
+        position = text.find(written, cursor)
+        if position >= 0:
+            return position, written
+    return max(position, 0), value
+
+
+def name_shaped(name: str) -> bool:
+    """Words a person's name is made of: capitalised words of letters, hyphens,
+    apostrophes and initials, and the particles of family names."""
+    tokens = name.split()
+    return bool(tokens) and any(t[0].isupper() for t in tokens) and all(
+        t.lower() in NAME_PARTICLES
+        or (t[0].isupper() and all(c.isalpha() or c in "'’.-" for c in t))
+        for t in tokens)
 # "DULUTH, MN 55803": a ZIP follows a two-letter state.
 ZIP_CODE = re.compile(r"\b[A-Z]{2}\s+(\d{5})\b")
 PHONE = re.compile(
@@ -248,6 +317,15 @@ PLACE_WORDS = {
     "northern", "southern", "eastern", "western", "republic", "island",
     "city", "county", "province", "region", "district",
 }
+# One-word US states, for "Riverton, Ohio". Georgia, Virginia, Washington,
+# Montana and Dakota are left out: they are also people's names.
+STATE_WORDS = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas",
+    "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "nebraska", "nevada", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "tennessee", "texas", "utah", "vermont", "wisconsin", "wyoming",
+}
 
 
 def _clean_name(name: str) -> str:
@@ -350,6 +428,11 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
                         or lowered.startswith(("the ", "a ", "an "))
                         or any(word in lowered for word in ORG_KEYWORDS)
                     )
+                    # "Rafael Ibarra Oncology Report" is a document about a
+                    # person, not an organisation: the model's ORG label hid
+                    # the patient's name in a page title.
+                    if words and words[-1].strip(".,:;").lower() in DOCUMENT_WORDS:
+                        organised = False
                     if not organised:
                         continue
                 else:
@@ -421,9 +504,15 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         # "HIV POSITIVE" is an acronym pair, not a person. Only reject pairs
         # that actually look like clinical acronyms — "SMITH JOHN" is a name
         # written the way a lab system writes it.
+        # "Member ID", "Rx BIN": beside an ordinary word, a short all-caps word is
+        # a field label's abbreviation, not a surname.
+        if first.isupper() != last.isupper() and \
+                len((first if first.isupper() else last).rstrip(".")) <= 3:
+            continue
         if first.isupper() and last.isupper():
+            # "FHIR API" as well as "HIV POSITIVE": short all-caps pairs are codes.
             if (first.rstrip(".") in ACRONYMS or last.rstrip(".") in ACRONYMS
-                    or (len(first) <= 3 and len(last) <= 3)):
+                    or (len(first) <= 4 and len(last) <= 4)):
                 continue
         # "B20" and "MRN" are codes, not people.
         if any(char.isdigit() for char in first + last):
@@ -446,6 +535,11 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         if len(first) < 3 or len(last) < 2:
             continue
         if last.lower() in NAME_STOP or first.lower() in NAME_STOP:
+            continue
+        # "Riverton, Ohio" is a city and its state; "Hospitals, Doctors and
+        # Care" is a list. Neither is "Ohio Riverton" or "Doctors Hospitals".
+        if first.lower() in PLACE_WORDS | STATE_WORDS \
+                or re.match(r"\s*(?:,|and\b|&|or\b)", text[end:end + 5]):
             continue
         if _abstract_noun(first) or any(ch.isdigit() for ch in last + first):
             continue
@@ -488,7 +582,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         merged.append(candidate)
 
-    result = [(start, end, name) for _, start, end, name in merged]
+    result = [(start, end, name) for _, start, end, name in merged if name_shaped(name)]
     if len(_NAME_CACHE) < _NAME_CACHE_MAX:
         _NAME_CACHE[text] = result
     return result
@@ -506,6 +600,12 @@ NAME_KEYS = re.compile(
     r"^(patient|pt|subject)[_ ]?(full|first|last|middle)?[_ ]?name$"
     r"|^(first|last|middle|full|sur)[_ ]?name$"
     r"|^(name|patient|subject)$", re.I)
+PERSON_TYPES = {"person", "patient", "physician", "relatedperson", "practitioner"}
+# Where a site describes itself: dates and phones there are the site's own.
+SITE_METADATA = {"title", "meta_tag", "json_ld"}
+# Nouns that end a document's title, not an organisation's name.
+DOCUMENT_WORDS = {"report", "reports", "summary", "results", "result", "record", "records",
+                  "chart", "note", "notes", "letter", "form", "plan", "history", "statement"}
 RECORD_KEYS = re.compile(
     r"^(mrn|uhid|patient[_ ]?id|subject[_ ]?id|subjectid|suid"
     r"|accession[_ ]?(number|id)?|sample[_ ]?id|specimen[_ ]?id)$", re.I)
@@ -536,7 +636,14 @@ def _key_identifiers(payload: object) -> tuple[list[str], list[str]]:
 
     def walk(node: object) -> None:
         if isinstance(node, dict):
+            # schema.org and FHIR say what an object is. The "name" of a Place,
+            # an Event, an Organization or a MedicalCondition is not a person's:
+            # "Community Room B" was reported as one.
+            kind = node.get("@type") or node.get("resourceType")
+            thing = isinstance(kind, str) and kind.lower() not in PERSON_TYPES
             for key, value in node.items():
+                if thing and key.lower() == "name":
+                    continue
                 if NAME_KEYS.match(key) and not isinstance(value, (int, float)):
                     _collect_names(value, names)
                 elif isinstance(value, str) and value.strip() and RECORD_KEYS.match(key):
@@ -638,7 +745,14 @@ def _raw_values(text: str, label: str) -> list[str]:
     return out
 
 
-def identifiers(text: str, allow_names: bool = True) -> dict:
+def identifiers(text: str, allow_names: bool = True, code: bool = False,
+                not_names: frozenset[str] = frozenset()) -> dict:
+    # code=True for scripts and source maps. A 6-8 digit constant there is a
+    # bit mask (React's 4194304), not a record number, and a capitalised pair in
+    # a comment ("Core Schema", "Parses YAML") is not a person: in code a name
+    # counts only beside a record number, SSN or plan id, the way a hard-coded
+    # patient is written ('Ana Ruiz|MRN-880137|E11.9').
+    # not_names: what this page shows as an organisation's name ("Mercy Valley").
     # Minified code is adversarial for name detection: identifiers are mangled
     # to one or two letters and UI strings are dense. On the first real target
     # this produced six findings, every one of them nonsense ("New", "Test",
@@ -671,6 +785,7 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
                             for token in name.split())]
     else:
         names = find_names(text) if allow_names else []
+    names = keep_names(names, text, not_names)
     mrns = [m.group(0) for m in MRN.finditer(text)]
     for record in key_records:
         if record not in mrns:
@@ -685,15 +800,16 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     # A bare 6-8 digit run beside a named person is a record number. Without a
     # name in the same record it could be a date, a code or a measurement, and
     # guessing there costs more precision than the recall is worth.
-    if names and not mrns:
+    if names and not mrns and not code:
         for match in BARE_ID.finditer(text):
-            # One digit repeated ("000000") is a placeholder in a form, not a record.
-            if len(set(match.group(0))) > 1:
-                mrns.append(match.group(0))
+            mrns.append(match.group(0))
     # A number beside its own label is a record number even without a name.
     for value in _labelled_ids(text):
         if value not in mrns:
             mrns.append(value)
+    # "000000" in a code box and "123456789" on a sample card are a form's
+    # examples, labelled or not.
+    mrns = [value for value in mrns if not placeholder_number(value)]
 
     ssns = [m.group(0) for m in SSN.finditer(text) if ssn_valid(m.group(0))]
     plans = [m.group(0) for m in MBI.finditer(text) if mbi_valid(m.group(0))
@@ -712,6 +828,8 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
     ips = [m.group(0) for m in IPV4.finditer(text)
            if not m.group(0).startswith(PRIVATE_IP)]
     zips = [m.group(1) for m in ZIP_CODE.finditer(text)]
+    if code and not (mrns or ssns or plans):
+        names = []
 
     keys: list[str] = []
     if names:
@@ -752,6 +870,8 @@ def identifiers(text: str, allow_names: bool = True) -> dict:
         # For entity resolution only; detect() tokenises them and drops the text.
         "names": names,
         "ids": ssns + mrns,
+        # Names read from JSON keys, not from text: predicates must judge these.
+        "structured": payload is not None and not embedded_code,
     }
 
 
@@ -1032,7 +1152,8 @@ def _span_text(row: dict, vault: Vault) -> tuple[str, str | None] | None:
     decoded = decode_blob(text)
     if decoded is not None:
         return decoded, digest(text)
-    if row["carrier"] in ("url", "page_link", "third_party") or PERCENT.search(text):
+    # A sitemap entry is a URL too: "?patient=Walter+Briggs" was missed there.
+    if row["carrier"] in ("url", "page_link", "third_party", "sitemap") or PERCENT.search(text):
         # "Jane%20Doe" is a name, in a URL or a log; in a query string, so is
         # "John+Gonzales": form encoding writes a space as "+".
         decode = urllib.parse.unquote_plus if "=" in text else urllib.parse.unquote
@@ -1255,6 +1376,7 @@ def detect(index_path: Path, vault_root: Path,
     # deserves an answer.
     file_values: dict[str, set[str]] = {}
     pages: dict[str, str] = {}
+    orgs: dict[str, frozenset[str]] = {}
     raw_seen: set[str] = set()
     for path in {row["path"] for row in rows}:
         joined = "\n".join(texts[row["obs_id"]] for row in rows
@@ -1262,6 +1384,7 @@ def detect(index_path: Path, vault_root: Path,
         found = identifiers(joined)
         file_values[path] = set(found["values"]) | set(extended_identifiers(joined))
         pages[path] = joined
+        orgs[path] = organisation_names(joined)
 
     # The predicates read the page as served: block elements, JSON-LD markup, a
     # footer. Every row collected with no derivation points into the raw file.
@@ -1300,8 +1423,11 @@ def detect(index_path: Path, vault_root: Path,
             # Detection reads the record with its disguises undone; the
             # evidence still points at the bytes as stored.
             seen = normalize(unit)
+            not_names = orgs.get(row["path"], frozenset())
             ids = (identifiers_from_record(seen) if labelled
-                   else identifiers(seen, allow_names=allow_names))
+                   else identifiers(seen, allow_names=allow_names,
+                                    code=row["carrier"] in ("js_bundle", "source_map"),
+                                    not_names=not_names))
 
             # A long number in a filename is a record number until proven
             # otherwise: "chart_2024_0012345.txt" is a patient identifier that
@@ -1367,7 +1493,13 @@ def detect(index_path: Path, vault_root: Path,
                 # Security number identifies a person with no diagnosis needed.
                 if ids["always"]:
                     take = True
-                elif row["carrier"] in HIGH_CARRIERS and ids["identity"]:
+                # In a title, meta tag or JSON-LD a date or phone on its own is
+                # the site's: an article's publication time, the hospital's
+                # main line. A name or record number is needed there. Hidden
+                # places keep the wider rule: a phone in an HTML comment is a
+                # patient's (world L014).
+                elif row["carrier"] in HIGH_CARRIERS and (
+                        ids["strong"] if row["carrier"] in SITE_METADATA else ids["identity"]):
                     take = True
                 elif ids["strong"] and has_health:
                     # A phone number on its own is the organisation's, not a
@@ -1378,7 +1510,11 @@ def detect(index_path: Path, vault_root: Path,
             if not take:
                 continue
 
-            names = find_names(unit) if "names" in ids["keys"] else []
+            # The predicates judge the names the decision was made on: from a JSON
+            # payload those come from its keys, and the text reading differs
+            # ("Community Room" instead of the organizer "Maria Lopez").
+            names = ([] if "names" not in ids["keys"] else ids["names"] if ids.get("structured")
+                     else keep_names(find_names(unit), unit, not_names))
             record = Record(text=unit, page=pages.get(row["path"], ""), path=row["path"],
                             names=names, health=has_health,
                             direct_ids=[v for v in ids["values"] if v not in names],
@@ -1398,11 +1534,9 @@ def detect(index_path: Path, vault_root: Path,
             if encoded is not None:
                 offset, length = row["offset"], row["length"]
             else:
-                position = text.find(ids["primary"], cursor)
-                if position < 0:
-                    position = 0
-                cursor = position + max(1, len(ids["primary"]))
-                offset, length = _byte_span(row, text, position, ids["primary"])
+                position, written = _locate(text, ids["primary"], cursor)
+                cursor = position + max(1, len(written))
+                offset, length = _byte_span(row, text, position, written)
 
             hashes = {digest(v) for v in ids["values"]}
             if covered:

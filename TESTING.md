@@ -21,6 +21,7 @@ the same file.
 | `check_world` | every planted leak exists exactly where the key says |
 | `check_collect` | every carrier is reachable; the index holds no PHI |
 | `check_detect` | all leaks found; nothing invented |
+| `check_realsite` | on a realistic hospital site (doctor bios, bylines, trial investigators, sample cards, real vendor libraries) every planted leak is found and nothing else is flagged |
 | `check_ai` | a model cannot add, remove or promote a finding |
 | `check_crawl` | one host, GET only, robots obeyed, rate limited |
 | `check_scale` | linear at volume, deduplicating, bounded memory |

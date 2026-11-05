@@ -23,6 +23,7 @@ GATES = [
     ["tools/check_collect.py"],
     ["tools/gate_g2.py"],
     ["tools/check_detect.py"],
+    ["tools/check_realsite.py"],
     ["tools/gate_g3.py"],
     ["fixtures/build_injection.py"],
     ["tools/check_ai.py"],

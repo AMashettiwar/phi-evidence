@@ -12,6 +12,7 @@ detector enforces that; these functions do not need to know it.
 
 from __future__ import annotations
 
+import functools
 import html
 import ipaddress
 import re
@@ -63,6 +64,22 @@ ORG_SCHEMA = re.compile(
 TAG = re.compile(r"<[^>]+>")
 IMG_ALT = re.compile(r"""<img\b[^>]*\balt\s*=\s*["']([^"']*)["'][^>]*>""", re.I)
 WHITESPACE = re.compile(r"\s+")
+# The same person shown as staff or author somewhere on the page. Real hospital
+# sites name their people everywhere: "Dr. Lena Fischer" in a press release,
+# "Priya Raman, MD" as a reviewer, "Marcus Webb, president and CEO", a recruiter,
+# a meta author tag, a JSON-LD organizer. Each is evidence about that one name.
+CLINICIAN_BEFORE = r"\b(?:Dr|Dra|Doctor|Prof|Professor)\.?\s+"
+CREDENTIAL_AFTER = (r",?\s+(?:MD|DO|RN|NP|PA-C|DDS|DMD|PharmD|PhD|MPH|MSN|BSN|APRN|CRNA|CNM|"
+                    r"LCSW|CDCES|FACC|FACP|FAAP|FACS)\b")
+ROLE_AFTER = (r",\s+(?:[A-Za-z]+\s+){0,3}?(?i:president|chief|ceo|director|manager|coordinator|"
+              r"officer|chair|administrator|educator|specialist|professor|investigator|editor|"
+              r"writer|reporter|recruiter|spokesperson)\b")
+ROLE_BEFORE = (r"\b(?:Recruiter|Media contact|Study contact|Principal investigator|Privacy Officer|"
+               r"Led by|Organi[sz]er|Presenter|Speaker)\s*:?\s*")
+BYLINE_BEFORE = r"\b(?:By|Written by|Reviewed by|Medically reviewed by|Author)\s*:?\s+"
+JSON_LD_ROLE = (r'"(?:author|reviewedBy|organizer|editor|creator|contributor|performer|employee|'
+                r'founder|accountablePerson)"\s*:\s*\{[^{}]*"name"\s*:\s*"(?:Dr\.?\s+)?')
+META_AUTHOR = re.compile(r"<meta\b[^>]*>", re.I)
 RESERVED_DOMAINS = (".example", ".test", ".invalid", ".localhost",
                     "example.com", "example.net", "example.org")
 RESERVED_NETS = [ipaddress.ip_network(n) for n in
@@ -81,6 +98,31 @@ class Record:
     own_values: set[str] = field(default_factory=set)     # the scanning account's own record
 
 
+def role_evidence(name: str, record: Record) -> tuple[str, str] | None:
+    """("staff" | "byline", what was seen) when the page shows this person as
+    a clinician, an employee or an author; None otherwise."""
+    pattern = r"\s+".join(re.escape(part) for part in name.split())
+    plain = _plain(record.page) + "\n" + record.text if record.page else record.text
+    for kind, regex in (("staff", CLINICIAN_BEFORE + pattern), ("staff", pattern + CREDENTIAL_AFTER),
+                        ("staff", pattern + ROLE_AFTER), ("staff", ROLE_BEFORE + pattern),
+                        ("byline", BYLINE_BEFORE + pattern)):
+        match = re.search(regex, plain)
+        if match:
+            return kind, WHITESPACE.sub(" ", match.group(0)).strip()
+    if re.search(JSON_LD_ROLE + pattern, record.page):
+        return "byline", f"named as a schema.org author, reviewer or organizer: {name}"
+    for tag in META_AUTHOR.findall(record.page):
+        if re.search(r"""(?:name|property)\s*=\s*["'](?:author|article:author)["']""", tag, re.I) \
+                and re.search(r"""content\s*=\s*["']""" + pattern + r"""["']""", tag):
+            return "byline", f"the page's author tag: {name}"
+    return None
+
+
+def _all_roles(record: Record) -> list[tuple[str, str]] | None:
+    found = [role_evidence(name, record) for name in record.names]
+    return found if record.names and all(found) else None
+
+
 def provider_staff_page(record: Record) -> str | None:
     if PATIENT_CUE.search(record.text):
         return None
@@ -88,6 +130,9 @@ def provider_staff_page(record: Record) -> str | None:
         return f"staff directory path {record.path}"
     if PHYSICIAN_MARKUP.search(record.page):
         return "schema.org Physician markup on the page"
+    roles = _all_roles(record)
+    if roles and any(kind == "staff" for kind, _ in roles):
+        return "named on this page as staff: " + "; ".join(seen for _, seen in roles)
     # The NPI may sit in the next cell of the same table row: read the record
     # elements that hold this text, not just the text run.
     for text in [record.text] + [t for tag, t, _ in containing_blocks(record) if tag in RECORD_TAGS]:
@@ -107,6 +152,11 @@ def public_health_article(record: Record) -> str | None:
         before = record.text[:max(record.text.find(name), 0)]
         if BYLINE.search(before[-40:]):
             return "the named person is the article's byline, not a patient"
+    # The byline may sit elsewhere on the page: a meta author tag, JSON-LD
+    # author or reviewedBy, "By Jordan Lee" above the article.
+    roles = _all_roles(record)
+    if roles:
+        return "the page names this person as its author or reviewer: " + "; ".join(s for _, s in roles)
     return None
 
 
@@ -184,8 +234,10 @@ def own_record(record: Record) -> str | None:
     return None
 
 
+@functools.lru_cache(maxsize=64)
 def _plain(markup: str) -> str:
     # Image alt text is part of the record, as it is in the rendered text.
+    # Cached: every name on a page is checked against the same page.
     markup = IMG_ALT.sub(lambda m: f" {m.group(1)} ", markup)
     return WHITESPACE.sub(" ", html.unescape(TAG.sub(" ", markup))).strip()
 
