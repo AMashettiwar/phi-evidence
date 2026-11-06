@@ -16,9 +16,12 @@ from __future__ import annotations
 import os
 import re
 
-from .lexicon import health_hits
+from .lexicon import HEALTH_TERMS, health_hits
 
 # Substances too common to be a health fact on their own.
+# All-caps drug abbreviations of four letters or more that notes actually use.
+DRUG_ABBREVIATIONS = {"HCTZ", "APAP", "NSAID", "NSAIDS", "SSRI", "SSRIS", "SNRI", "SNRIS",
+                      "LMWH", "HAART", "DMARD", "DMARDS", "PPIS", "TMP-SMX", "INSULIN"}
 COMMON_CHEMICALS = {"water", "oxygen", "salt", "sugar", "coffee", "tea", "caffeine",
                     "glucose", "sodium", "calcium", "iron", "alcohol", "nicotine",
                     "carbon", "nitrogen", "hydrogen", "vitamin", "protein", "fat"}
@@ -70,12 +73,14 @@ def american(text: str) -> str:
         text = pattern.sub(replacement, text)
     return text
 CELL_SPLIT = re.compile(r"\s*[|;\t]\s*")
+CODE_IDENTIFIER = re.compile(r"^[A-Z][a-z]+(?:[A-Z][a-z]+)+\b")
 WORDLIKE = re.compile(r"^[A-Za-z][A-Za-z0-9 ,'/()\-.]*$")
 REAL_WORD = re.compile(r"[A-Za-z]{3,}")
 
 _MODEL = None
 _CACHE: dict[str, list[tuple[str, str]]] = {}
 _CACHE_MAX = 50000
+_OVERFLOW: dict[str, list[tuple[str, str]]] = {}  # one batch's answers once the cache is full
 MAX_CHARS = 20000
 
 
@@ -90,13 +95,65 @@ def _model():
 
 def entities(text: str) -> list[tuple[str, str]]:
     """(text, label) for every DISEASE and CHEMICAL mention, cached by text."""
-    cached = _CACHE.get(text)
-    if cached is not None:
-        return cached
-    found = [(e.text, e.label_) for e in _model()(american(text[:MAX_CHARS])).ents]
-    if len(_CACHE) < _CACHE_MAX:
-        _CACHE[text] = found
-    return found
+    return entities_many([text])[0]
+
+
+def entities_many(texts: list[str]) -> list[list[tuple[str, str]]]:
+    """entities() for many texts, the uncached ones read in one batch. The same
+    answers as one call each, without the per-call overhead: a FHIR server's
+    page split into 30,000 table cells took eight minutes one at a time."""
+    missing = list(dict.fromkeys(t for t in texts if t not in _CACHE))
+    if missing:
+        docs = _model().pipe((american(t[:MAX_CHARS]) for t in missing), batch_size=256)
+        for text, doc in zip(missing, docs):
+            found = [(e.text, e.label_) for e in doc.ents]
+            if len(_CACHE) < _CACHE_MAX:
+                _CACHE[text] = found
+            else:
+                _OVERFLOW[text] = found
+    result = [_CACHE.get(t) if t in _CACHE else _OVERFLOW.get(t, []) for t in texts]
+    _OVERFLOW.clear()
+    return result
+
+
+def _mentions(text: str, names: list[str] | tuple) -> list[str]:
+    """Disease and drug mentions the model finds, as health() counts them."""
+    # Table cells and pipe-separated fields are read one by one as well: the
+    # model found COPD in prose but not in "Danielle Martinez | COPD". Only
+    # within the MAX_CHARS the whole-text pass reads, so a huge page is not
+    # split into tens of thousands of cells.
+    head = text[:MAX_CHARS]
+    segments = [text] + [part for part in CELL_SPLIT.split(head) if len(part) > 2] \
+        if CELL_SPLIT.search(head) else [text]
+    found = entities_many(segments)
+    return [name for labelled in found for name, label in labelled
+            if WORDLIKE.match(name) and REAL_WORD.search(name)
+            # "MolecularSequence", "AllergyIntolerance": capitalised words run
+            # together are a FHIR type or a class name, never clinical prose.
+            and not CODE_IDENTIFIER.match(name)
+            and (label == "DISEASE"
+                 or (label == "CHEMICAL" and name.lower() not in COMMON_CHEMICALS
+                     # "INT" in a SQL schema and "Apt" in an address are not
+                     # drugs; no drug name is shorter than four letters.
+                     and len(name) >= 4
+                     # Nor is "HFQL" (a FHIR server's query language): an
+                     # all-caps "chemical" is an acronym unless it is a
+                     # drug abbreviation clinicians write.
+                     and (not name.isupper() or name in DRUG_ABBREVIATIONS)))
+            and not any(name.strip() in person for person in names)]
+
+
+def health_positions(text: str, names: list[str] | tuple = ()) -> list[int]:
+    """Where in the text each health fact health() would count sits. One model
+    pass (cached), so a long block need not be re-read per name."""
+    lowered = text.lower()
+    spots = [m.start() for term in HEALTH_TERMS if term in lowered
+             for m in re.finditer(re.escape(term), lowered)]
+    spots += [m.start() for pattern in (LABELLED_DX, DISORDER, PROCEDURE)
+              for m in pattern.finditer(text)]
+    spots += [m.start() for mention in set(_mentions(text, names))
+              for m in re.finditer(re.escape(mention), text)]
+    return spots
 
 
 def health(text: str, names: list[str] | tuple = ()) -> tuple[bool, list[str]]:
@@ -113,18 +170,7 @@ def health(text: str, names: list[str] | tuple = ()) -> tuple[bool, list[str]]:
         hit = True
     if not any(c.isalpha() for c in text):
         return hit, tags
-    # Table cells and pipe-separated fields are read one by one as well: the
-    # model found COPD in prose but not in "Danielle Martinez | COPD".
-    segments = [text] + [part for part in CELL_SPLIT.split(text) if len(part) > 2] \
-        if CELL_SPLIT.search(text) else [text]
-    mentions = [name for segment in segments for name, label in entities(segment)
-                if WORDLIKE.match(name) and REAL_WORD.search(name)
-                and (label == "DISEASE"
-                     or (label == "CHEMICAL" and name.lower() not in COMMON_CHEMICALS
-                         # "INT" in a SQL schema and "Apt" in an address are not
-                         # drugs; no drug name is shorter than four letters.
-                         and len(name) >= 4))
-                and not any(name.strip() in person for person in names)]
+    mentions = _mentions(text, names)
     if mentions or DISORDER.search(text) or PROCEDURE.search(text):
         hit = True
     evidence = " ".join(mentions) + " " + text

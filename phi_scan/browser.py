@@ -179,6 +179,7 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
     responses: dict[str, dict] = {}     # rel path -> what was served
     runtime: list[tuple[str, str, str]] = []  # (rel path, carrier, text) seen only at runtime
     blobs: dict[str, bytes] = {}        # screenshots and the HAR, vaulted after collection
+    screenshots_skipped: list[str] = []  # pages whose screenshot failed; recorded, not fatal
 
     def session(account: dict) -> list[dict]:
         """The account's cookies, from one "name=value" or a whole Cookie line
@@ -310,8 +311,14 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 if response is None or response.status != 200:
                     continue
                 rel = local_path(page.url, response.all_headers().get("content-type", ""))
-                page.add_style_tag(content=BLUR)
-                blobs[f"screenshot:{rel}"] = page.screenshot(full_page=True)
+                try:
+                    page.add_style_tag(content=BLUR)
+                    blobs[f"screenshot:{rel}"] = page.screenshot(full_page=True, timeout=20_000)
+                except PlaywrightError:
+                    # The page's bytes are already captured; a picture of it is
+                    # supporting evidence, not worth the scan. HAPI's 1.9 MB
+                    # front page timed out here and the whole scan stopped.
+                    screenshots_skipped.append(rel)
                 links = sorted({urljoin(page.url, h) for h in HREF.findall(page.content())})
                 queue += [link for link in links if link not in seen and guard.allowed(link)]
             # Storage, IndexedDB and cookies belong to the origin, not a page:
@@ -377,6 +384,7 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         "stopped": guard.stopped,
         "audience": audience,
         "access_test": access_test,
+        "screenshots_skipped": screenshots_skipped,
         "cached_publicly": sorted(r for r, v in responses.items() if "public" in v["cache"]),
         "noindex": sorted(r for r, v in responses.items() if "noindex" in v["robots"]),
         "evidence": {name: vault.put(data) for name, data in sorted(blobs.items())},

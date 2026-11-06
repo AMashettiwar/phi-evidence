@@ -139,6 +139,87 @@ def test_code_names_need_a_record_beside_them():
     assert {"names", "mrn"} <= set(identifiers(hardcoded, code=True)["keys"])
 
 
+# Rules from the first public real site: the HAPI FHIR test server (2026-11-05).
+
+def test_acronyms_and_code_identifiers_are_not_names():
+    for name in ("HAPI FHIR", "Swagger UI", "Server Base URL", "CatalogEntry Index", "OpenAPI Docs"):
+        assert not name_shaped(name), name
+    for name in ("Ronald McDonald", "LaToya Jackson", "Leonardo DiCaprio", "Mary-Jane O'Neil", "SMITH JOHN"):
+        assert name_shaped(name), name
+
+
+def test_interface_wording_alone_is_not_a_person(tmp_path, monkeypatch):
+    page = ("<html><head><title>Server Home</title></head><body>"
+            "<!-- ** Server Actions (no resource selected) ** --><p>Get Tags</p>"
+            "<script>// Begin Swagger UI call region\nconst counts = {Observation: 112641};</script>"
+            "</body></html>")
+    assert scan(tmp_path, monkeypatch, {"index.html": page})[0] == []
+    # A name with a date beside it in a hidden place is still a record.
+    hidden = page.replace("<p>Get Tags</p>", '<span style="position:absolute;left:-9999px">'
+                                             "Rosa Delgado 1958-07-14</span>")
+    assert scan(tmp_path / "leak", monkeypatch, {"index.html": hidden})[0]
+
+
+def test_a_number_far_from_a_name_is_not_their_record():
+    statement = ('{"contact": [{"name": "Dr. Lena Fischer"}], ' + '"x": 1, ' * 120
+                 + '"resource": [{"type": "Observation", "count": 112641}]}')
+    assert "mrn" not in identifiers(statement)["keys"]
+    assert "mrn" in identifiers("Dr. Lena Fischer saw the patient, chart 4471829.")["keys"]
+
+
+def test_counts_beside_interface_words_are_not_record_numbers():
+    assert "mrn" not in identifiers("Server Actions | Observation 112641 | Patient 29131")["keys"]
+    assert "mrn" in identifiers("Patient: Rosa Delgado 4471829")["keys"]
+
+
+def test_health_must_be_near_a_weak_name_in_a_long_block():
+    menu = "Server Home | " + " | ".join(f"Resource{i} {i}" for i in range(60)) + " | breast cancer screening"
+    assert len(menu) > 300
+    ids = identifiers(menu)
+    assert ids["names"] and not ids["person"]
+    story = "Emeka Delgado was treated for breast cancer at the oncology clinic last spring."
+    assert identifiers(story)["names"]
+
+
+def test_labelled_name_in_a_script_is_backed():
+    ids = identifiers("window.__lastSearch = {name: 'Rafael Ibarra', dx: 'breast cancer'};")
+    assert ids["person"]
+
+
+def test_tech_acronyms_are_not_chemicals():
+    from phi_scan.clinical import health
+    assert not health("Server | HFQL / SQL | Resources")[0]
+    assert health("started HCTZ for hypertension")[0]
+
+
+def test_labelled_and_model_backed_names_still_count(tmp_path, monkeypatch):
+    """The weak-name rule first cost 16 corpus leaks (G5): the attribute's own
+    name labels its value, and a name the model recognises is never weak."""
+    labelled = ('<html><body><div data-patient="Russell Foster" data-dx="prenatal care">'
+                'Summary</div></body></html>')
+    assert scan(tmp_path, monkeypatch, {"a.html": labelled})[0]
+    hidden = ('<html><body><span aria-hidden="true">Zachary Kline - chronic obstructive '
+              'pulmonary disease</span></body></html>')
+    assert scan(tmp_path / "b", monkeypatch, {"b.html": hidden})[0]
+    interface = '<html><body><button data-tooltip="Server Actions">Go</button></body></html>'
+    assert scan(tmp_path / "c", monkeypatch, {"c.html": interface})[0] == []
+
+
+def test_patients_in_one_bundle_stay_separate_people(tmp_path, monkeypatch):
+    """HAPI's Patient search returned 20 patients in one bundle; the whole-
+    bundle finding carried all their record numbers and linked them into one."""
+    people = [("Rosa", "Delgado", "4471829"), ("Helen", "Marsh", "8823140"),
+              ("Gary", "Whitfield", "5512093"), ("Dorothy", "Sims", "6619027")]
+    bundle = {"resourceType": "Bundle", "type": "searchset", "entry": [
+        {"resource": {"resourceType": "Patient", "name": [{"family": last, "given": [first]}],
+                      "identifier": [{"type": {"text": "MRN"}, "value": mrn}],
+                      "birthDate": "1960-01-0" + str(i + 1)}}
+        for i, (first, last, mrn) in enumerate(people)]}
+    found, _, _ = scan(tmp_path, monkeypatch, {"patients.json": json.dumps(bundle)})
+    assert len(found) >= len(people)
+    assert len({f["person"] for f in found}) >= len(people)
+
+
 def test_staff_named_on_the_page_but_never_a_patient(tmp_path, monkeypatch):
     staff = ("<html><head><title>New cancer center</title></head><body><p>&ldquo;Care close to home "
              "matters,&rdquo; said Marcus Webb, president and CEO. The center treats breast and lung "

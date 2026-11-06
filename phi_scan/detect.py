@@ -22,6 +22,7 @@ Three rules that took a failing gate to learn:
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import hmac
 import json
@@ -29,7 +30,7 @@ import re
 import urllib.parse
 from pathlib import Path
 
-from .clinical import health
+from .clinical import health, health_positions
 from .negatives import PREDICATES, Record
 from .normalize import normalize
 from .validators import mbi_valid
@@ -65,6 +66,8 @@ _NLP_LOADED = False
 # large win; it changes no result, only how often the model is asked.
 _NAME_CACHE: dict[str, list[tuple[int, int, str]]] = {}
 _NAME_CACHE_MAX = 20000
+_WEAK_CACHE: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+_LAST_WEAK: list = [("", (frozenset(), frozenset()))]
 
 
 def _load_model():
@@ -136,10 +139,57 @@ PLACEHOLDER_NAME = re.compile(
 # <, quotes) means the model read code.
 NAME_PARTICLES = {"de", "del", "della", "der", "den", "di", "da", "dos", "du", "la", "le",
                   "van", "von", "bin", "ibn", "al", "el", "y"}
+NAME_PREFIX = re.compile(r"^(?:Mc|Mac|O['’]|D['’]|De|Di|Da|Du|La|Le|Van|Von|St)[A-Z]")
 # What follows an organisation's own name: "Mercy Valley Health".
 ORG_SUFFIX = re.compile(
     r"((?:[^\W\d_][\w'’-]*\s+){1,3}?)(?:Health|Hospitals?|Clinics?|Center|Centre|University|"
     r"College|Foundation|Institute|Associates|Partners|Group|Network|Systems?|Pharmacy|Labs?)\b")
+
+
+# A record value: a 6-8 digit number or a date, standing alone.
+RECORD_VALUE = re.compile(r"(?<![\w-])(?:\d{6,8}|(?:19|20)\d{2}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})(?![\w-])")
+SEPARATOR = " \t\r\n,;:()#|-–"
+
+
+def _value_beside_name(text: str, names: list[str]) -> bool:
+    """Whether any name has a record value directly before or after it, with
+    only punctuation between. One pass over the values, not one per name: a
+    1.9 MB page holds thousands of capitalised pairs."""
+    wanted = set(names)
+    longest = max(len(name) for name in names) + 6
+    for match in RECORD_VALUE.finditer(text):
+        before = text[max(0, match.start() - longest):match.start()]
+        trimmed = before.rstrip(SEPARATOR)
+        if len(before) - len(trimmed) in range(1, 6):
+            words = trimmed.split()
+            if any(" ".join(words[-k:]) in wanted for k in range(1, 5)):
+                return True
+        after = text[match.end():match.end() + longest]
+        trimmed = after.lstrip(SEPARATOR)
+        if len(after) - len(trimmed) in range(1, 6):
+            words = trimmed.split()
+            if any(" ".join(words[:k]).rstrip(SEPARATOR) in wanted for k in range(1, 5)):
+                return True
+    return False
+
+
+# How near a bare number must be to a name to be that person's record number.
+BESIDE_REACH = 80
+# An HTML attribute whose name says its value is a person.
+PERSON_ATTRIBUTE = re.compile(r"patient|person|name|member|subject|client|customer|user", re.I)
+# Fields of a person's record, as keys in code or data: {"name": ..., "dob": ...}.
+RECORD_FIELD = re.compile(r"""["']?\b(?:dob|birth_?date|date_?of_?birth|mrn|dx|diagnosis|ssn|"""
+                          r"""patient_?id|reason)["']?\s*[:=]""", re.I)
+
+
+def _record_fields_near(text: str, names: list[str], reach: int = 120) -> bool:
+    """A name in the same object as record fields is a person record:
+    window.__PORTAL_STATE__ = {"name": "Tomas Herrera", "dob": ..., "reason": ...}."""
+    for match in RECORD_FIELD.finditer(text):
+        window = text[max(0, match.start() - reach):match.end() + reach]
+        if any(name in window for name in names):
+            return True
+    return False
 
 
 def placeholder_number(value: str) -> bool:
@@ -189,12 +239,28 @@ def _locate(text: str, value: str, cursor: int) -> tuple[int, str]:
 
 def name_shaped(name: str) -> bool:
     """Words a person's name is made of: capitalised words of letters, hyphens,
-    apostrophes and initials, and the particles of family names."""
+    apostrophes and initials, and the particles of family names.
+
+    Not: a short acronym ("HAPI FHIR", "Swagger UI", "Server Base URL"), or a
+    word with code-style capitals inside it ("CatalogEntry", "OpenAPI"). Name
+    prefixes keep theirs: McDonald, MacKenzie, DeShawn, LaToya, O'Neil."""
     tokens = name.split()
-    return bool(tokens) and any(t[0].isupper() for t in tokens) and all(
-        t.lower() in NAME_PARTICLES
-        or (t[0].isupper() and all(c.isalpha() or c in "'’.-" for c in t))
-        for t in tokens)
+    if not tokens or not any(t[0].isupper() for t in tokens):
+        return False
+    for token in tokens:
+        if token.lower() in NAME_PARTICLES:
+            continue
+        if not (token[0].isupper() and all(c.isalpha() or c in "'’.-" for c in token)):
+            return False
+        inner = [i for i in range(1, len(token)) if token[i].isupper() and token[i - 1] not in "-'’"]
+        if inner and not token.isupper() and not NAME_PREFIX.match(token):
+            return False
+    words = [t for t in tokens if t.lower() not in NAME_PARTICLES]
+    acronyms = [t for t in words if t.isalpha() and t.isupper() and len(t) > 1]
+    if any(len(t) <= 4 for t in acronyms) and (len(acronyms) < len(words)
+                                               or all(len(t) <= 4 for t in acronyms)):
+        return False
+    return True
 # "DULUTH, MN 55803": a ZIP follows a two-letter state.
 ZIP_CODE = re.compile(r"\b[A-Z]{2}\s+(\d{5})\b")
 PHONE = re.compile(
@@ -224,7 +290,7 @@ NAME_COMMA = re.compile(rf"\b({WORD}),{SEP}({WORD})\b")
 # A name introduced by its own label needs only one word: "patient: Zozo".
 LABELED_NAME = re.compile(
     r"\b(?:patient|member|subscriber|guarantor|relative|contact|next of kin|"
-    r"provider|physician|surgeon|pathologist|name)\s*[:=]\s*"
+    r"provider|physician|surgeon|pathologist|name)\s*[:=]\s*['\"‘“]?"
     r"([A-Z][a-zA-Z'.-]{2,})", re.I)
 # Clinical acronyms. A two-word all-caps span is a name unless one of these.
 ACRONYMS = {
@@ -366,10 +432,20 @@ def _model_entities(text: str) -> tuple[list[tuple[int, int, int, str]],
     persons: list[tuple[int, int, int, str]] = []
     blocked: list[tuple[int, int]] = []
     nlp = _load_model()
-    for offset, chunk in _windows(text, MAX_NER_CHARS):
-        try:
-            doc = nlp(chunk)
-        except Exception:  # noqa: BLE001
+    windows = list(_windows(text, MAX_NER_CHARS))
+    # One batch for all windows of a long text: the same answers, without the
+    # per-call overhead that dominated a scan of a 1.9 MB page.
+    try:
+        docs = list(nlp.pipe((chunk for _, chunk in windows), batch_size=16))
+    except Exception:  # noqa: BLE001 - fall back to one window at a time
+        docs = []
+        for _, chunk in windows:
+            try:
+                docs.append(nlp(chunk))
+            except Exception:  # noqa: BLE001
+                docs.append(None)
+    for (offset, chunk), doc in zip(windows, docs):
+        if doc is None:
             continue
         for entity in doc.ents:
             start = offset + entity.start_char
@@ -474,6 +550,12 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
     model_persons, model_blocked = _model_entities(text)
     candidates.extend(model_persons)
     blocked.extend(model_blocked)
+    # Bare capitalised pairs with nothing else behind them: weak evidence of a
+    # person ("Server Actions", "Get Tags" in a real server's templates).
+    # Every other reading (model, honorific, "Last, First", label) backs a name;
+    # kept apart, because the model and a pair often return the same span.
+    pairs: set[tuple[int, int, str]] = set()
+    backing: list[tuple[int, int, int, str]] = list(model_persons)
 
     for match in TITLE.finditer(text):
         kept: list[str] = []
@@ -489,6 +571,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         start = match.start(1)
         candidates.append((1, start, start + len(" ".join(kept)), " ".join(kept)))
+        backing.append(candidates[-1])
 
     for match in NAME.finditer(text):
         start, end = match.start(1), match.end(2)
@@ -524,6 +607,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         if prefix.endswith("Dr."):
             continue
         candidates.append((2, start, end, _clean_name(f"{first} {last}")))
+        pairs.add(candidates[-1][1:])
 
     # "SMITH, JANE" is the same person as "Jane Smith". Two letters are
     # rejected so a city/state pair ("Bangor, ME") is never read as a name.
@@ -544,6 +628,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         if _abstract_noun(first) or any(ch.isdigit() for ch in last + first):
             continue
         candidates.append((2, start, end, _clean_name(f"{first} {last}")))
+        backing.append(candidates[-1])
 
     for match in LABELED_NAME.finditer(text):
         name = _clean_name(match.group(1))
@@ -551,6 +636,7 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
             continue
         start = match.start(1)
         candidates.append((2, start, start + len(match.group(1)), name))
+        backing.append(candidates[-1])
 
     # Drop anything the model says is an organisation or a place.
     surviving = [c for c in candidates if not _mostly_inside(c[1], c[2], blocked)]
@@ -583,9 +669,32 @@ def name_spans(text: str) -> list[tuple[int, int, str]]:
         merged.append(candidate)
 
     result = [(start, end, name) for _, start, end, name in merged if name_shaped(name)]
+    # A pair is weak unless something else (the model, an honorific, a label,
+    # the "Last, First" form) also found that name, here or overlapping it:
+    # "name: 'Rafael Ibarra'" labels "Rafael", which backs the pair.
+    others = [c for c in backing if not _mostly_inside(c[1], c[2], blocked)]
+
+    def unbacked(by: list) -> frozenset[str]:
+        return frozenset(name for start, end, name in result
+                         if not any(c[3] == name or (c[1] < end and start < c[2]) for c in by))
+
+    # In prose the model's PERSON label backs a pair. Inside a script it does not:
+    # trained on prose, it called "Unique Identifier" a person in API docs.
+    weak = frozenset(n for n in unbacked(others) if any((s, e, n) in pairs for s, e, _ in result))
+    weak_in_script = unbacked([c for c in others if c[0] != 0])
     if len(_NAME_CACHE) < _NAME_CACHE_MAX:
         _NAME_CACHE[text] = result
+        _WEAK_CACHE[text] = (weak, weak_in_script)
+    _LAST_WEAK[0] = (text, (weak, weak_in_script))
     return result
+
+
+def weak_names(text: str, script: bool = False) -> frozenset[str]:
+    """Names in this text with nothing behind them but capitalisation (or, in
+    a script, only the model's opinion)."""
+    name_spans(text)
+    found = _LAST_WEAK[0][1] if _LAST_WEAK[0][0] == text else _WEAK_CACHE.get(text)
+    return (found or (frozenset(), frozenset()))[1 if script else 0]
 
 
 def find_names(text: str) -> list[str]:
@@ -603,6 +712,10 @@ NAME_KEYS = re.compile(
 PERSON_TYPES = {"person", "patient", "physician", "relatedperson", "practitioner"}
 # Where a site describes itself: dates and phones there are the site's own.
 SITE_METADATA = {"title", "meta_tag", "json_ld"}
+CODE_CARRIERS = {"inline_script", "js_bundle", "source_map"}
+# Longer than this, a block is not one record; within this of a weak name, a
+# health fact is about that person.
+BIND_LIMIT, BIND_WINDOW = 300, 150
 # Nouns that end a document's title, not an organisation's name.
 DOCUMENT_WORDS = {"report", "reports", "summary", "results", "result", "record", "records",
                   "chart", "note", "notes", "letter", "form", "plan", "history", "statement"}
@@ -745,7 +858,7 @@ def _raw_values(text: str, label: str) -> list[str]:
     return out
 
 
-def identifiers(text: str, allow_names: bool = True, code: bool = False,
+def identifiers(text: str, allow_names: bool = True, code: bool = False, script: bool = False,
                 not_names: frozenset[str] = frozenset()) -> dict:
     # code=True for scripts and source maps. A 6-8 digit constant there is a
     # bit mask (React's 4194304), not a record number, and a capitalised pair in
@@ -786,6 +899,14 @@ def identifiers(text: str, allow_names: bool = True, code: bool = False,
     else:
         names = find_names(text) if allow_names else []
     names = keep_names(names, text, not_names)
+    structured = payload is not None and not embedded_code
+    names_weak = bool(names) and not structured and set(names) <= weak_names(text, script or code)
+    # A number or date directly beside a name is a person record's shape
+    # ("Rosa Delgado 1958-07-14", "Rafael Ibarra | 4471829"), so it backs a weak
+    # name. A count after other words does not ("Server Actions | HFQL / SQL |
+    # Resources | Observation 112641").
+    if names_weak and (_value_beside_name(text, names) or _record_fields_near(text, names)):
+        names_weak = False
     mrns = [m.group(0) for m in MRN.finditer(text)]
     for record in key_records:
         if record not in mrns:
@@ -800,9 +921,18 @@ def identifiers(text: str, allow_names: bool = True, code: bool = False,
     # A bare 6-8 digit run beside a named person is a record number. Without a
     # name in the same record it could be a date, a code or a measurement, and
     # guessing there costs more precision than the recall is worth.
-    if names and not mrns and not code:
+    # The person must be credible: beside "Server Actions" a number is a
+    # count (HAPI's "Observation 123456"), not a record.
+    # Beside means near: in a FHIR server's capability statement a software
+    # contact's name sits tens of thousands of characters from the resource
+    # counts, and every count became a "record number".
+    if names and not names_weak and not mrns and not code:
+        anchors = sorted(m.start() for name in set(names) for m in re.finditer(re.escape(name), text))
         for match in BARE_ID.finditer(text):
-            mrns.append(match.group(0))
+            at = bisect.bisect_left(anchors, match.start())
+            near = [anchors[i] for i in (at - 1, at) if 0 <= i < len(anchors)]
+            if any(abs(match.start() - spot) <= BESIDE_REACH for spot in near):
+                mrns.append(match.group(0))
     # A number beside its own label is a record number even without a name.
     for value in _labelled_ids(text):
         if value not in mrns:
@@ -871,7 +1001,10 @@ def identifiers(text: str, allow_names: bool = True, code: bool = False,
         "names": names,
         "ids": ssns + mrns,
         # Names read from JSON keys, not from text: predicates must judge these.
-        "structured": payload is not None and not embedded_code,
+        "structured": structured,
+        # Evidence of an actual person: a name something besides capitalisation
+        # backs, or a record number, SSN or plan id.
+        "person": bool((names and not names_weak) or mrns or ssns or plans),
     }
 
 
@@ -1222,6 +1355,8 @@ def _learn_shapes(texts) -> list[re.Pattern]:
 
 
 HONORIFICS = {"mr", "mrs", "ms", "miss", "dr", "prof", "sir", "dame"}
+# One person's record carries a record number, perhaps an SSN and a plan id.
+MAX_IDS_ONE_PERSON = 3
 
 
 def _name_key(name: str) -> str | None:
@@ -1229,10 +1364,10 @@ def _name_key(name: str) -> str | None:
     words = re.findall(WORD, name)
     while words and words[0].lower() in HONORIFICS and len(words) > 1:
         words = words[1:]
-    if not words:
+    # One word is a first name or a surname alone: every "John" in a bundle of
+    # patients would become one person. It links nobody.
+    if len(words) < 2:
         return None
-    if len(words) == 1:
-        return digest("name\0" + words[0].lower())
     first, last = (words[1], words[0]) if "," in name else (words[0], words[-1])
     return digest(f"name\0{last.lower()}\0{first[0].lower()}")
 
@@ -1253,14 +1388,23 @@ def _resolve_people(findings: list[dict]) -> None:
             token = parent[token]
         return token
 
+    # A finding over a whole list (a FHIR bundle of 20 patients, a roster)
+    # holds many people's record numbers. That is not evidence they are one
+    # person: linking through it labelled 20 test patients as one.
+    def one_person(finding: dict) -> bool:
+        return len(set(finding["_ids"])) <= MAX_IDS_ONE_PERSON
+
     for finding in findings:
+        if not one_person(finding):
+            continue
         tokens = finding["_ids"] + (finding["_names"] if finding["_ids"] else [])
         for token in tokens[1:]:
             parent[find(token)] = find(tokens[0])
     labels: dict[str, str] = {}
-    for finding in findings:
+    for number, finding in enumerate(findings):
+        many = not one_person(finding)
         keys = finding.pop("_ids") + finding.pop("_names")
-        root = find(keys[0]) if keys else f"alone{len(labels)}"
+        root = find(keys[0]) if keys and not many else f"alone{number}"
         finding["person"] = labels.setdefault(root, f"p{len(labels) + 1:03d}")
 
 
@@ -1373,16 +1517,27 @@ def detect(index_path: Path, vault_root: Path,
     # Every identifier present anywhere in a document belongs to that document's
     # exposure. A finding pointing at one paragraph still exposes the phone
     # number in the next one, and a reviewer asking "was this value here?"
-    # deserves an answer.
-    file_values: dict[str, set[str]] = {}
+    # deserves an answer. Read only when needed (covered-entity reports, the
+    # account's own record): it reruns name detection over the whole page, and
+    # a public-web scan never uses it. On a 1.9 MB page that was most of the time.
+    joined_by_path: dict[str, str] = {}
+    value_cache: dict[str, set[str]] = {}
+
+    def file_values(path: str) -> set[str]:
+        if path not in value_cache:
+            joined = joined_by_path.get(path, "")
+            found = identifiers(joined)
+            value_cache[path] = set(found["values"]) | set(extended_identifiers(joined))
+        return value_cache[path]
+
     pages: dict[str, str] = {}
     orgs: dict[str, frozenset[str]] = {}
+    raw_docs: dict[str, bytes] = {}
     raw_seen: set[str] = set()
     for path in {row["path"] for row in rows}:
         joined = "\n".join(texts[row["obs_id"]] for row in rows
                            if row["path"] == path and row["obs_id"] in texts)
-        found = identifiers(joined)
-        file_values[path] = set(found["values"]) | set(extended_identifiers(joined))
+        joined_by_path[path] = joined
         pages[path] = joined
         orgs[path] = organisation_names(joined)
 
@@ -1401,7 +1556,7 @@ def detect(index_path: Path, vault_root: Path,
     for path, page in pages.items():
         if (measured or {}).get(path) == "authenticated_self" or (
                 own_ids and _record_id(page) in own_ids):
-            own_values |= file_values[path]
+            own_values |= file_values(path)
 
     findings: list[dict] = []
     for row in rows:
@@ -1427,7 +1582,18 @@ def detect(index_path: Path, vault_root: Path,
             ids = (identifiers_from_record(seen) if labelled
                    else identifiers(seen, allow_names=allow_names,
                                     code=row["carrier"] in ("js_bundle", "source_map"),
+                                    script=row["carrier"] == "inline_script",
                                     not_names=not_names))
+            # An attribute value is labelled by the attribute's own name:
+            # data-patient="Russell Foster" says what the value is, though the
+            # value alone is just a capitalised pair.
+            if row["carrier"] == "html_attribute" and ids.get("names") \
+                    and not ids.get("person", True):
+                raw = raw_docs.setdefault(row["doc"], vault.get(row["doc"]))
+                before = raw[max(0, row["offset"] - 60):row["offset"]].decode("utf-8", "replace")
+                attribute = re.search(r"([\w:-]+)\s*=\s*[\"']?$", before)
+                if attribute and PERSON_ATTRIBUTE.search(attribute.group(1)):
+                    ids["person"] = True
 
             # A long number in a filename is a record number until proven
             # otherwise: "chart_2024_0012345.txt" is a patient identifier that
@@ -1472,6 +1638,14 @@ def detect(index_path: Path, vault_root: Path,
                 continue
 
             has_health, tags = health(seen, ids.get("names", []))
+            # A weak name and a health word in one long, unstructured block (a
+            # FHIR server's 4,000-character menu) are not one record: the
+            # health fact must sit within about a sentence of the name.
+            if has_health and ids.get("names") and not ids.get("person", True) \
+                    and len(seen) > BIND_LIMIT:
+                spots = health_positions(seen, ids["names"])
+                has_health = any(abs(spot - m.start()) <= BIND_WINDOW for name in ids["names"]
+                                 for m in re.finditer(re.escape(name), seen) for spot in spots)
             context_health = False
             if row["carrier"] == "file_metadata" and not has_health and clinical(row["path"]):
                 # The health context comes from the file, not from this field.
@@ -1498,10 +1672,19 @@ def detect(index_path: Path, vault_root: Path,
                 # main line. A name or record number is needed there. Hidden
                 # places keep the wider rule: a phone in an HTML comment is a
                 # patient's (world L014).
+                # A bare capitalised pair alone is not enough either: a real
+                # server's comments, titles and scripts are full of them
+                # ("Server Actions", "Get Tags"). Hidden places still count a
+                # phone on its own (world L014).
                 elif row["carrier"] in HIGH_CARRIERS and (
-                        ids["strong"] if row["carrier"] in SITE_METADATA else ids["identity"]):
+                        ids.get("person", ids["strong"])
+                        or (row["carrier"] not in SITE_METADATA and "phone" in ids["keys"])):
                     take = True
-                elif ids["strong"] and has_health:
+                # In code a bare capitalised pair beside a health word is
+                # noise: a FHIR server's capability statement names "Source
+                # Software" and "MolecularSequence". Prose keeps the wider rule.
+                elif (ids.get("person", ids["strong"]) if row["carrier"] in CODE_CARRIERS
+                      else ids["strong"]) and has_health:
                     # A phone number on its own is the organisation's, not a
                     # patient's. Identity means a name, a record number or an SSN.
                     take = True
@@ -1543,7 +1726,7 @@ def detect(index_path: Path, vault_root: Path,
                 # Covered-entity reports the document, so the document's
                 # identifiers go with it. Public-web keeps one finding per
                 # record, which is the invariant the world fixture checks.
-                hashes.update(digest(v) for v in file_values.get(row["path"], ()))
+                hashes.update(digest(v) for v in file_values(row["path"]))
             if encoded is not None:
                 hashes.add(encoded)
 
@@ -1609,7 +1792,7 @@ def detect(index_path: Path, vault_root: Path,
             path = row["path"]
             if path in covered:
                 continue
-            values = file_values.get(path)
+            values = file_values(path)
             text = texts.get(row["obs_id"])
             if not values or not text:
                 continue

@@ -261,6 +261,32 @@ below is the specification's own example patient.</p>
 <p>Authorize with SMART on FHIR. Sandbox client id: demo-client-001.</p>""",
         description="Connect apps to Mercy Valley Health records with our FHIR API."))
 
+    # The shapes a FHIR server's own web interface has (seen on the public HAPI
+    # test server, 2026-11-05): a resource menu with counts, template comment
+    # banners, an API-docs title, a code comment. Written here, not copied.
+    menu = " | ".join(["Server Home", "Server Actions", "HFQL / SQL", "Resources"]
+                      + [f"{kind} {count}" for kind, count in (
+                          ("Observation", 112641), ("Patient", 29131), ("Encounter", 16035),
+                          ("MedicationRequest", 10658), ("Condition", 9500),
+                          ("AllergyIntolerance", 4421), ("MolecularSequence", 812))])
+    write("developers/fhir-server.html", f"""<!doctype html><html><head><title>FHIR Server</title>
+</head><body><!-- ********************************************* -->
+<!-- ** Server Actions (no resource selected)    ** -->
+<!-- ********************************************* -->
+<nav>{menu}</nav>
+<div class="well"><p>Get Tags. Show all of the tags currently in use on the server.</p></div>
+<script>// Begin Swagger UI call region
+const statement = {{"publisher": "Open Source Software", "software": {{"name": "Demo Server"}},
+"rest": [{{"resource": [{{"type": "Observation", "count": 112641}}]}}]}};</script>
+<div class="recent"><h2>Recently updated</h2><p>Patient/8812: Harriet Quinn 1961-02-03, admitted
+with sepsis, MRN 7740215.</p></div></body></html>""")
+    write("developers/api-docs/index.html", """<!doctype html><html><head><title>Swagger UI</title>
+</head><body><div id="swagger-ui"></div><script>// Begin Swagger UI call region
+window.onload = function () { SwaggerUIBundle({url: "/fhir/api-docs", dom_id: "#swagger-ui"}); };
+</script></body></html>""")
+    plant("developers/fhir-server.html", "7740215",
+          "a patient record listed on a FHIR server's own admin page")
+
     write("notice-of-privacy-practices.html", page(
         "Notice of Privacy Practices | Mercy Valley Health",
         """<h1>Notice of Privacy Practices</h1><p>This notice describes how medical information about

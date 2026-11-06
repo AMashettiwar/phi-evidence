@@ -228,3 +228,37 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - found on the way (pre-existing): "Rafael Ibarra Oncology Report" was tagged ORG and hid the name
 - **verify:** realsite 8/8, 0 false alarms; check_detect, G0, G1, G2 (gap 1.031 s), G3, G6,
   evasion, context, emit, 108 tests; G5 13/14 with every recall and precision number unchanged
+
+### First public real site: HAPI FHIR public test server (2026-11-05)
+- SMART Health IT sandbox skipped: its robots.txt says `Disallow: *`. HAPI has no robots.txt and
+  exists for public testing; 20 pages, about 1 request a second, AI off
+- run 1 crashed: a full-page screenshot of the 1.9 MB front page timed out and ended the scan.
+  Screenshots now fail soft and are listed in `capture.json` -> `screenshots_skipped`
+- run 2: 16 findings, all false (the crawl reached only the server's own UI). Causes and fixes,
+  each tested in `tests/test_real_app.py` and locked into `fixtures/build_realsite.py`:
+  - a bare capitalised pair ("Server Actions", "Get Tags") is weak evidence: alone it no longer
+    flags a title, comment or script, and no 6-8 digit count beside it becomes a record number.
+    It is backed by the model, an honorific or label, "Last, First", a record value directly
+    beside it, or record fields (dob, mrn, dx) in the same object
+  - acronym pairs ("HAPI FHIR", "Swagger UI") and code capitals ("CatalogEntry") are not names,
+    from any source including the model; McDonald, LaToya, DiCaprio still are
+  - in a long unstructured block a weak name needs its health fact within 150 characters
+  - all-caps "chemicals" (HFQL) and run-together type names (MolecularSequence) are not health
+  - in scripts, a weak name beside a health word is noise; a person needs real evidence
+- true positives on real software output: one HAPI Patient search page (20 test patients) as a
+  public file: 20/20 found, Critical. Found on the way: the whole-bundle finding carried all 20
+  record numbers and linked them as one person; first names alone also linked people. Lists
+  with more than 3 ids no longer link, single-word names never do: 20 findings, 20 people
+- speed: detection on HAPI's 20 pages was dominated by the language models. Table cells are read
+  only within the first 20,000 characters, both models read in batches, and the whole-page value
+  list is built only when used: 311 s CPU for 20 pages including a 1.9 MB page
+- G5 caught the weak-name rule's cost before commit: web carriers 160 -> 144. Causes: a
+  name the model found at the same span as a pair was wrongly weak (bug), and data-* values
+  lost their label. Fixed: backing readings are tracked apart; an attribute's own name
+  (data-patient) labels its value. Real-site follow-ups the same evaluation then exposed:
+  a bare number counts only within 80 characters of the name (a capability statement's
+  counts sat 50 KB from a contact name), and inside scripts the prose model's PERSON label
+  alone backs nothing ("Unique Identifier" in embedded API docs)
+- **verify (final):** HAPI pages 0 false alarms; HAPI patients 20/20 as 20 people; realsite
+  9/9 and 0; 118 tests; 14 quick gates; G2 (gap 1.022 s), G6; G5 13/14 with recall and
+  precision unchanged; rules vs rules+LLM b=5 c=0 this run
