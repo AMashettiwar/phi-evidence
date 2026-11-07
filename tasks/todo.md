@@ -262,3 +262,19 @@ G0 rulebook sign-off, G5 blind two-reviewer adjudication.
 - **verify (final):** HAPI pages 0 false alarms; HAPI patients 20/20 as 20 people; realsite
   9/9 and 0; 118 tests; 14 quick gates; G2 (gap 1.022 s), G6; G5 13/14 with recall and
   precision unchanged; rules vs rules+LLM b=5 c=0 this run
+
+### Second public real site: OpenEMR demo (2026-11-06/07)
+- target `https://demo.openemr.io/openemr` (host root has no robots.txt; the app redirects to
+  its login page). Run 1 crashed: reading localStorage was refused ("Access is denied for this
+  document") and the scan ended with nothing saved
+- fixed: storage, IndexedDB, cookies, a page's links and any single request now fail soft and
+  are listed in `capture.json` -> `collection_skipped` (test: a page load and a file whose
+  connections are dropped)
+- run 2 completed: 0 findings, but **nothing was scanned**. OpenEMR's own robots.txt at
+  /openemr/robots.txt says `Disallow: /`; the bot obeyed it. Run 1's refusal was the browser
+  still on its blank start page. `pages: 7` in capture.json counts addresses considered, not
+  pages read (only robots.txt was kept, 4 requests sent)
+- open: a scan stopped by robots.txt reports "0 findings", which reads as clean; it should say
+  nothing was scanned and why. "pages" should count pages actually read
+- one full-suite run failed the new test while the machine slept (18 h wall clock); details not
+  kept; 3 runs since pass (119 tests)

@@ -180,6 +180,11 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
     runtime: list[tuple[str, str, str]] = []  # (rel path, carrier, text) seen only at runtime
     blobs: dict[str, bytes] = {}        # screenshots and the HAR, vaulted after collection
     screenshots_skipped: list[str] = []  # pages whose screenshot failed; recorded, not fatal
+    collection_skipped: list[str] = []   # anything else not collected, and why
+
+    def skip(what: str, error: Exception) -> None:
+        reason = (str(error).strip().splitlines() or [type(error).__name__])[0]
+        collection_skipped.append(f"{what}: {reason[:160]}")
 
     def session(account: dict) -> list[dict]:
         """The account's cookies, from one "name=value" or a whole Cookie line
@@ -256,9 +261,16 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                     guard.refuse(url, "GET", {})
                 return 0, {}, b""
             guard.wait()
-            response = request_context.get(url, max_redirects=0)
+            try:
+                response = request_context.get(url, max_redirects=0)
+                headers, body = response.headers, response.body()
+            except PlaywrightError as error:
+                # A dropped connection or a timeout on one address is that
+                # address's problem, not the scan's: recorded, then skipped.
+                guard.record(url, 0)
+                skip(url, error)
+                return 0, {}, b""
             guard.record(url, response.status)
-            headers, body = response.headers, response.body()
             if store:
                 observe(url, response.status, headers, body)
             return response.status, headers, body
@@ -319,18 +331,35 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                     # supporting evidence, not worth the scan. HAPI's 1.9 MB
                     # front page timed out here and the whole scan stopped.
                     screenshots_skipped.append(rel)
-                links = sorted({urljoin(page.url, h) for h in HREF.findall(page.content())})
+                try:
+                    content = page.content()
+                except PlaywrightError as error:
+                    skip(f"links of {rel}", error)
+                    continue
+                links = sorted({urljoin(page.url, h) for h in HREF.findall(content)})
                 queue += [link for link in links if link not in seen and guard.allowed(link)]
             # Storage, IndexedDB and cookies belong to the origin, not a page:
-            # read them once, after every script on every page has run.
-            storage = page.evaluate(DUMP_STORAGE)
-            for kind in ("local", "session"):
-                for name, value in storage[kind]:
-                    runtime.append(("storage", "browser_storage", f"{kind}Storage {name}={value}"))
-            for entry in page.evaluate(DUMP_INDEXEDDB):
-                runtime.append(("storage", "indexeddb", json.dumps(entry, sort_keys=True)))
-            for cookie in context.cookies():
-                runtime.append(("cookies", "cookie", f"{cookie['name']}={cookie['value']}"))
+            # read them once, after every script on every page has run. Each
+            # read may be refused: OpenEMR's last page was a document that may
+            # not touch localStorage, and that refusal ended the whole scan.
+            try:
+                storage = page.evaluate(DUMP_STORAGE)
+                for kind in ("local", "session"):
+                    for name, value in storage[kind]:
+                        runtime.append(("storage", "browser_storage",
+                                        f"{kind}Storage {name}={value}"))
+            except PlaywrightError as error:
+                skip("localStorage and sessionStorage", error)
+            try:
+                for entry in page.evaluate(DUMP_INDEXEDDB):
+                    runtime.append(("storage", "indexeddb", json.dumps(entry, sort_keys=True)))
+            except PlaywrightError as error:
+                skip("IndexedDB", error)
+            try:
+                for cookie in context.cookies():
+                    runtime.append(("cookies", "cookie", f"{cookie['name']}={cookie['value']}"))
+            except PlaywrightError as error:
+                skip("cookies", error)
 
             # Identity oracle (brief 4.4): can account A read account B's record?
             if me:
@@ -385,6 +414,7 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         "audience": audience,
         "access_test": access_test,
         "screenshots_skipped": screenshots_skipped,
+        "collection_skipped": collection_skipped,
         "cached_publicly": sorted(r for r, v in responses.items() if "public" in v["cache"]),
         "noindex": sorted(r for r, v in responses.items() if "noindex" in v["robots"]),
         "evidence": {name: vault.put(data) for name, data in sorted(blobs.items())},
