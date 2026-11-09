@@ -622,21 +622,46 @@ def _hidden_sheet_rows(archive, names: set[str]) -> list[tuple[str, str, str]]:
     return records
 
 
-def _collect_image(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
-    """Pull the printable strings out of an image, where EXIF and XMP live.
+def _ocr_image_bytes(data: bytes) -> str:
+    """Run OCR on raster image bytes when dimensions are large enough to hold text.
 
-    There is no OCR here, so text burned into the pixels is not read and the
-    report says so. Metadata is different: PNG text chunks and JPEG APP1 blocks
-    routinely carry a patient name, a device and a date.
+    Tiny synthetic fixture thumbnails (such as 8x8 test JPEGs) are skipped so
+    metadata-only fixtures stay fast and byte-identical.
     """
-    # EXIF is read as tagged fields, kept as one record: one image's metadata
-    # block, the way one JSON object is one record. Only an image without EXIF
-    # falls back to printable strings.
+    import io  # noqa: PLC0415
+
+    try:
+        from PIL import Image  # noqa: PLC0415
+        import pytesseract  # noqa: PLC0415
+
+        with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            if width < 16 or height < 16:
+                return ""
+            text = pytesseract.image_to_string(img)
+            return text.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _collect_image(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
+    """Pull EXIF/XMP metadata, burned-in pixel text via OCR, and printable strings."""
     tags = _exif_tags(data)
     if tags:
         encoded = "\n".join(tags).encode("utf-8")
         sink.add(path, vault.put(encoded), 0, len(encoded), "exif", "exif_block", "exif_block")
+        ocr_text = _ocr_image_bytes(data)
+        if ocr_text:
+            ocr_bytes = ocr_text.encode("utf-8")
+            sink.add(path, vault.put(ocr_bytes), 0, len(ocr_bytes),
+                     "downloadable_file", "image_ocr", "pdf_text")
         return
+
+    ocr_text = _ocr_image_bytes(data)
+    if ocr_text:
+        ocr_bytes = ocr_text.encode("utf-8")
+        sink.add(path, vault.put(ocr_bytes), 0, len(ocr_bytes),
+                 "downloadable_file", "image_ocr", "pdf_text")
 
     strings: list[str] = []
     run = bytearray()
@@ -652,7 +677,8 @@ def _collect_image(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vaul
 
     merged = "\n".join(strings[:2000])
     if not merged.strip():
-        sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
+        if not ocr_text:
+            sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
         return
     derived = vault.put(merged.encode("utf-8"))
     sink.add(path, derived, 0, len(merged), "file_metadata", "image_strings", "image_strings")
@@ -721,18 +747,32 @@ def _exif_tags(data: bytes) -> list[str]:
     return [f"{_EXIF_NAMES[tag]}: {found[tag]}" for tag in sorted(found)]
 
 
-def _collect_dicom(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
-    """Read the DICOM header and store the tags as a derived text document.
+def _dicom_pixel_ocr(data: bytes) -> str:
+    """Extract burned-in text from DICOM pixel frames or embedded JPEG streams."""
+    jpeg_start = data.find(b"\xff\xd8\xff")
+    if jpeg_start >= 132:
+        jpeg_end = data.rfind(b"\xff\xd9")
+        if jpeg_end > jpeg_start:
+            ocr = _ocr_image_bytes(data[jpeg_start:jpeg_end + 2])
+            if ocr:
+                return ocr
+    return ""
 
-    DICOM is binary, so the bytes are not searchable as text. The header is
-    where the identifiers live: patient name, record number, date of birth, the
-    ordering physician, and often the diagnosis in StudyDescription. A real
-    deployment also has to look at burned-in pixel text; that needs OCR and is
-    not attempted here, which is stated rather than implied.
-    """
+
+def _collect_dicom(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
+    """Read the DICOM header and burned-in pixel text, storing derived text documents."""
     tags = _dicom_tags(data)
-    if not tags:
+    pixel_ocr = _dicom_pixel_ocr(data)
+    if not tags and not pixel_ocr:
         sink.add(path, raw_doc, 0, len(data), "downloadable_file", "binary")
+        return
+
+    if pixel_ocr:
+        ocr_encoded = pixel_ocr.encode("utf-8")
+        sink.add(path, vault.put(ocr_encoded), 0, len(ocr_encoded),
+                 "dicom_header", "dicom_pixel_ocr", "pdf_text")
+
+    if not tags:
         return
 
     # The tag number is the label. Flattening the header to text loses it.
@@ -748,9 +788,6 @@ def _collect_dicom(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vaul
     lines = [f"{tag}: {value}" for tag, value in tags]
     text = "\n".join(lines)
     derived = vault.put(text.encode("utf-8"))
-    # One observation for the whole header, so identity and diagnosis stay in
-    # the same record. Per-tag observations would separate the name from the
-    # diagnosis and nothing would link.
     sink.add(path, derived, 0, len(text), "dicom_header", "tag_text", "dicom_tags")
 
 
@@ -790,6 +827,140 @@ def _dicom_tags(data: bytes) -> list[tuple[str, str]]:
     return found
 
 
+def _pdf_incremental_revisions(data: bytes, final_text: str) -> list[str]:
+    """Extract text from earlier PDF incremental revisions that vanished in the final save.
+
+    When a PDF is edited and saved incrementally, earlier %%EOF sections remain
+    in the file bytes. Any text stream in an earlier revision that is absent
+    from the final visible text is an unflattened revision leak.
+    """
+    import io  # noqa: PLC0415
+
+    eof_positions = [m.end() for m in re.finditer(rb"%%EOF\s*", data)]
+    if len(eof_positions) <= 1:
+        return []
+    leaked: list[str] = []
+    try:
+        from pypdf import PdfReader  # noqa: PLC0415
+    except ImportError:
+        return []
+    for pos in eof_positions[:-1]:
+        try:
+            earlier = PdfReader(io.BytesIO(data[:pos]))
+            rev_text = "\n".join((p.extract_text() or "") for p in earlier.pages).strip()
+            for line in rev_text.splitlines():
+                clean = line.strip()
+                if clean and clean not in final_text and clean not in leaked:
+                    leaked.append(clean)
+        except Exception:  # noqa: BLE001
+            continue
+    return leaked
+
+
+def _pdf_annotations_and_forms(reader) -> list[str]:
+    """Extract interactive form field values (/AcroForm) and page annotations (/Annots)."""
+    notes: list[str] = []
+    try:
+        fields = reader.get_fields() or {}
+        for name, field in sorted(fields.items()):
+            val = field.get("/V") if isinstance(field, dict) else None
+            if isinstance(val, str) and val.strip():
+                notes.append(f"{name}: {val.strip()}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        for page in reader.pages:
+            annots = page.get("/Annots")
+            if not annots:
+                continue
+            for ref in annots:
+                obj = ref.get_object() if hasattr(ref, "get_object") else ref
+                if not isinstance(obj, dict):
+                    continue
+                parts = []
+                for key in ("/T", "/Subj", "/Contents"):
+                    val = obj.get(key)
+                    if isinstance(val, str) and val.strip():
+                        parts.append(val.strip())
+                if parts:
+                    notes.append(" - ".join(parts))
+    except Exception:  # noqa: BLE001
+        pass
+    return notes
+
+
+def _pdf_ocr_and_hidden(data: bytes, native_text: str) -> tuple[list[str], list[str]]:
+    """Run OCR on scanned PDF pages / embedded images and detect faux redaction boxes.
+
+    Returns (ocr_lines, hidden_under_redaction_lines).
+    """
+    ocr_lines: list[str] = []
+    hidden_lines: list[str] = []
+    try:
+        import pymupdf as fitz  # noqa: PLC0415
+    except ImportError:
+        return ocr_lines, hidden_lines
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception:  # noqa: BLE001
+        return ocr_lines, hidden_lines
+
+    try:
+        for page in doc:
+            # 1. Detect faux redactions: filled dark rectangles drawn directly over text words.
+            try:
+                drawings = page.get_drawings()
+                dark_rects = [
+                    d["rect"] for d in drawings
+                    if d.get("fill") is not None
+                    and all(c <= 0.15 for c in (d.get("fill") or (1, 1, 1)))
+                    and d.get("rect") is not None
+                ]
+                if dark_rects:
+                    words = page.get_text("words")
+                    covered = []
+                    for w in words:
+                        w_rect = fitz.Rect(w[:4])
+                        if any(w_rect.intersects(r) for r in dark_rects):
+                            covered.append(w[4])
+                    if covered:
+                        line = " ".join(covered).strip()
+                        if line and line not in hidden_lines:
+                            hidden_lines.append(line)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 2. Extract embedded images or render scanned pages with no native text.
+            images = page.get_images(full=True)
+            page_text = (page.get_text("text") or "").strip()
+            if images:
+                for img_info in images[:10]:
+                    xref = img_info[0]
+                    try:
+                        base_img = doc.extract_image(xref)
+                        img_bytes = base_img.get("image") if base_img else None
+                        if img_bytes:
+                            ocr = _ocr_image_bytes(img_bytes)
+                            if ocr and ocr not in native_text:
+                                ocr_lines.append(ocr)
+                    except Exception:  # noqa: BLE001
+                        continue
+            elif not page_text and not native_text.strip():
+                try:
+                    pix = page.get_pixmap(dpi=200)
+                    ocr = _ocr_image_bytes(pix.tobytes("png"))
+                    if ocr:
+                        ocr_lines.append(ocr)
+                except Exception:  # noqa: BLE001
+                    pass
+    finally:
+        doc.close()
+
+    return ocr_lines, hidden_lines
+
+
 def _collect_pdf(path: str, data: bytes, raw_doc: str, sink: Sink,
                  vault: Vault) -> None:
     sink.add(path, raw_doc, 0, len(data), "downloadable_file", "whole_file_binary")
@@ -799,18 +970,231 @@ def _collect_pdf(path: str, data: bytes, raw_doc: str, sink: Sink,
         return
     import io
 
-    reader = PdfReader(io.BytesIO(data))
-    text = "\n".join((page.extract_text() or "") for page in reader.pages)
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:  # noqa: BLE001
+        reader = None
+        text = ""
+
     if text.strip():
         derived = vault.put(text.encode("utf-8"))
-        sink.add(path, derived, 0, len(text), "downloadable_file", "pdf_text_layer", "pdf_text")
-    info = reader.metadata or {}
-    # Sorted, because dictionary order from the PDF reader is not guaranteed and
-    # an unsorted loop made one finding appear and disappear between runs.
-    for key, value in sorted(info.items()):
-        if isinstance(value, str) and value.strip():
-            derived = vault.put(value.encode("utf-8"))
-            sink.add(path, derived, 0, len(value), "file_metadata", f"pdf_info{key}", "pdf_metadata")
+        sink.add(path, derived, 0, len(text.encode("utf-8")), "downloadable_file", "pdf_text_layer", "pdf_text")
+
+    if reader is not None:
+        info = reader.metadata or {}
+        # Sorted, because dictionary order from the PDF reader is not guaranteed and
+        # an unsorted loop made one finding appear and disappear between runs.
+        for key, value in sorted(info.items()):
+            if isinstance(value, str) and value.strip():
+                encoded_val = value.encode("utf-8")
+                derived = vault.put(encoded_val)
+                sink.add(path, derived, 0, len(encoded_val), "file_metadata", f"pdf_info{key}", "pdf_metadata")
+
+        annots = _pdf_annotations_and_forms(reader)
+        if annots:
+            annot_bytes = "\n".join(annots).encode("utf-8")
+            sink.add(path, vault.put(annot_bytes), 0, len(annot_bytes),
+                     "downloadable_file", "pdf_annotations", "pdf_text")
+
+    revisions = _pdf_incremental_revisions(data, text)
+    if revisions:
+        rev_bytes = "\n".join(revisions).encode("utf-8")
+        sink.add(path, vault.put(rev_bytes), 0, len(rev_bytes),
+                 "hidden_code", "pdf_revision", "pdf_text")
+
+    ocr_lines, hidden_lines = _pdf_ocr_and_hidden(data, text)
+    if hidden_lines:
+        hid_bytes = "\n".join(hidden_lines).encode("utf-8")
+        sink.add(path, vault.put(hid_bytes), 0, len(hid_bytes),
+                 "hidden_code", "pdf_unflattened_redaction", "pdf_text")
+    if ocr_lines:
+        ocr_bytes = "\n".join(ocr_lines).encode("utf-8")
+        sink.add(path, vault.put(ocr_bytes), 0, len(ocr_bytes),
+                 "downloadable_file", "pdf_ocr", "pdf_text")
+
+
+_RTF_SKIP_GROUPS = re.compile(
+    r"\{\\(?:fonttbl|colortbl|stylesheet|info|pict|object|header|footer)\b[^{}]*(?:\{[^{}]*\}[^{}]*)*\}",
+    re.S | re.I,
+)
+_RTF_HEX = re.compile(r"\\'([0-9a-fA-F]{2})")
+_RTF_CTRL = re.compile(r"\\(?:par|line|row|cell|tab)\b ?|\\[a-zA-Z]+-?\d* ?|\\[^a-zA-Z]|[\{\}]")
+
+
+def _rtf_to_text(raw: str) -> str:
+    """Convert Rich Text Format (.rtf) markup into plain text records."""
+    cleaned = _RTF_SKIP_GROUPS.sub(" ", raw)
+    cleaned = _RTF_HEX.sub(lambda m: bytes.fromhex(m.group(1)).decode("cp1252", "replace"), cleaned)
+
+    def _replace_ctrl(match: re.Match) -> str:
+        token = match.group(0).strip()
+        if token in (r"\par", r"\line", r"\row"):
+            return "\n"
+        if token in (r"\cell", r"\tab"):
+            return " | "
+        return ""
+
+    plain = _RTF_CTRL.sub(_replace_ctrl, cleaned)
+    lines = [" ".join(line.split()) for line in plain.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def _collect_rtf(path: str, data: bytes, raw_doc: str, sink: Sink, vault: Vault) -> None:
+    text = data.decode("utf-8", "replace")
+    plain = _rtf_to_text(text)
+    if plain.strip():
+        encoded = plain.encode("utf-8")
+        sink.add(path, vault.put(encoded), 0, len(encoded),
+                 "downloadable_file", "rtf_text", "pdf_text")
+    else:
+        sink.add(path, raw_doc, 0, len(data), "downloadable_file", "whole_file")
+
+
+def _collect_eml(path: str, data: bytes, sink: Sink, vault: Vault,
+                 target_host: str | None, depth: int) -> None:
+    """Extract headers, body text/HTML, and attachments from a MIME .eml message."""
+    import email  # noqa: PLC0415
+    from email import policy as email_policy  # noqa: PLC0415
+
+    try:
+        msg = email.message_from_bytes(data, policy=email_policy.default)
+    except Exception:  # noqa: BLE001
+        return
+
+    headers = []
+    for hdr in ("Subject", "From", "To", "Cc", "Date"):
+        val = msg.get(hdr)
+        if val:
+            headers.append(f"{hdr}: {val}")
+    if headers:
+        hdr_bytes = "\n".join(headers).encode("utf-8")
+        sink.add(path, vault.put(hdr_bytes), 0, len(hdr_bytes),
+                 "downloadable_file", "email_headers", "pdf_text")
+
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        filename = part.get_filename()
+        ctype = (part.get_content_type() or "").lower()
+        try:
+            payload = part.get_payload(decode=True)
+        except Exception:  # noqa: BLE001
+            payload = None
+        if not payload:
+            continue
+        if filename:
+            _collect_item(path, filename, payload, sink, vault, target_host, depth + 1)
+        elif ctype == "text/html":
+            part_doc = vault.put(payload)
+            _collect_html(path, payload.decode("utf-8", "replace"), part_doc, sink, target_host)
+        elif ctype.startswith("text/"):
+            part_doc = vault.put(payload)
+            _collect_text(path, payload.decode("utf-8", "replace"), part_doc, sink)
+
+
+_MAX_ARCHIVE_DEPTH = 3
+_MAX_ARCHIVE_MEMBERS = 60
+_MAX_MEMBER_BYTES = 25_000_000
+
+
+def _collect_archive(path: str, name: str, data: bytes, sink: Sink, vault: Vault,
+                     target_host: str | None, depth: int) -> None:
+    """Recursively inspect .zip, .tar, .tar.gz, .tgz, and .gz containers."""
+    import gzip  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import tarfile  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+
+    if depth > _MAX_ARCHIVE_DEPTH:
+        return
+    lower = name.lower()
+    try:
+        if lower.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                for info in sorted(zf.infolist(), key=lambda i: i.filename)[:_MAX_ARCHIVE_MEMBERS]:
+                    if info.is_dir() or info.file_size > _MAX_MEMBER_BYTES:
+                        continue
+                    _collect_item(path, info.filename, zf.read(info.filename),
+                                  sink, vault, target_host, depth + 1)
+        elif lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2")):
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
+                members = [m for m in tf.getmembers() if m.isfile() and m.size <= _MAX_MEMBER_BYTES]
+                for member in sorted(members, key=lambda m: m.name)[:_MAX_ARCHIVE_MEMBERS]:
+                    extracted = tf.extractfile(member)
+                    if extracted is not None:
+                        _collect_item(path, member.name, extracted.read(),
+                                      sink, vault, target_host, depth + 1)
+        elif lower.endswith(".gz"):
+            decompressed = gzip.decompress(data[:_MAX_MEMBER_BYTES])
+            inner_name = name[:-3] or "decompressed.txt"
+            _collect_item(path, inner_name, decompressed, sink, vault, target_host, depth + 1)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _collect_item(rel: str, item_name: str, data: bytes, sink: Sink, vault: Vault,
+                  target_host: str | None, depth: int = 0) -> None:
+    """Dispatch one file or container member into the appropriate collector."""
+    doc = vault.put(data)
+    lower_name = item_name.lower()
+    suffix = Path(lower_name).suffix
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+
+    posix = item_name.replace("\\", "/")
+    if re.search(r"[A-Za-z]{3,}[-_][A-Za-z]{3,}|mrn[-_ ]?\d|patient[-_]?id|\d{6,}",
+                 posix, re.I):
+        path_doc = vault.put(posix.encode("utf-8"))
+        sink.add(rel, path_doc, 0, len(posix.encode("utf-8")), "url", "file_path", "file_path")
+
+    if text is not None:
+        table = [0]
+        for character in text:
+            table.append(table[-1] + len(character.encode("utf-8")))
+        sink.maps[doc] = table
+
+    if suffix in (".html", ".htm") and text is not None:
+        for block in re.finditer(r"(?is)<style\b[^>]*>(.*?)</style>", text):
+            for match in CSS_CONTENT.finditer(block.group(1)):
+                sink.add(rel, doc, block.start(1) + match.start(2), len(match.group(2)),
+                         "css_hidden", "style_block")
+
+    if suffix == ".pdf":
+        _collect_pdf(rel, data, doc, sink, vault)
+    elif suffix == ".dcm":
+        _collect_dicom(rel, data, doc, sink, vault)
+    elif suffix in (".docx", ".xlsx", ".pptx"):
+        _collect_office(rel, data, doc, sink, vault)
+    elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".webp"):
+        _collect_image(rel, data, doc, sink, vault)
+    elif suffix == ".rtf":
+        _collect_rtf(rel, data, doc, sink, vault)
+    elif suffix == ".eml":
+        _collect_eml(rel, data, sink, vault, target_host, depth)
+    elif lower_name.endswith((".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".gz")):
+        _collect_archive(rel, item_name, data, sink, vault, target_host, depth)
+    elif text is None:
+        sink.add(rel, doc, 0, len(data), "downloadable_file", "binary")
+    elif Path(item_name).name in ("_headers", "_redirects"):
+        _collect_deploy(rel, text, doc, sink)
+    elif Path(item_name).name.lower() == "robots.txt":
+        offset = 0
+        for line in text.splitlines(keepends=True):
+            body = line.rstrip("\r\n")
+            if body and not body.lstrip().startswith("#"):
+                sink.add(rel, doc, offset, len(body), "robots_txt", "robots_line")
+            offset += len(line)
+    elif suffix in (".html", ".htm"):
+        _collect_html(rel, text, doc, sink, target_host)
+    elif suffix == ".js":
+        _collect_js(rel, text, doc, sink)
+    elif suffix in (".json", ".map"):
+        _collect_json(rel, text, doc, sink)
+    else:
+        _collect_text(rel, text, doc, sink)
 
 
 def collect(source: Path, out: Path, pylibs: str | None = None,
@@ -841,63 +1225,7 @@ def collect(source: Path, out: Path, pylibs: str | None = None,
     for path in files:
         rel = path.relative_to(source).as_posix()
         data = path.read_bytes()
-        doc = vault.put(data)
-        suffix = path.suffix.lower()
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            text = None
-
-        # The filename is a carrier. "Rafael-Ibarra_MRN-881010.html" puts a name
-        # and a record number somewhere no body scan will ever look. Only paths
-        # that look like they carry one are emitted, to keep the index small.
-        posix = rel.replace("\\", "/")
-        if re.search(r"[A-Za-z]{3,}[-_][A-Za-z]{3,}|mrn[-_ ]?\d|patient[-_]?id|\d{6,}",
-                     posix, re.I):
-            path_doc = vault.put(posix.encode("utf-8"))
-            sink.add(rel, path_doc, 0, len(posix), "url", "file_path", "file_path")
-
-        if text is not None:
-            table = [0]
-            for character in text:
-                table.append(table[-1] + len(character.encode("utf-8")))
-            sink.maps[doc] = table
-
-        if suffix in (".html", ".htm"):
-            # CSS can print a patient's name without it ever appearing in the
-            # document's text, because the browser generates it.
-            for block in re.finditer(r"(?is)<style\b[^>]*>(.*?)</style>", text):
-                for match in CSS_CONTENT.finditer(block.group(1)):
-                    sink.add(rel, doc, block.start(1) + match.start(2), len(match.group(2)),
-                             "css_hidden", "style_block")
-
-        if suffix == ".pdf":
-            _collect_pdf(rel, data, doc, sink, vault)
-        elif suffix == ".dcm":
-            _collect_dicom(rel, data, doc, sink, vault)
-        elif suffix in (".docx", ".xlsx", ".pptx"):
-            _collect_office(rel, data, doc, sink, vault)
-        elif suffix in (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff"):
-            _collect_image(rel, data, doc, sink, vault)
-        elif text is None:
-            sink.add(rel, doc, 0, len(data), "downloadable_file", "binary")
-        elif path.name in ("_headers", "_redirects"):
-            _collect_deploy(rel, text, doc, sink)
-        elif path.name.lower() == "robots.txt":
-            offset = 0
-            for line in text.splitlines(keepends=True):
-                body = line.rstrip("\r\n")
-                if body and not body.lstrip().startswith("#"):
-                    sink.add(rel, doc, offset, len(body), "robots_txt", "robots_line")
-                offset += len(line)
-        elif suffix in (".html", ".htm"):
-            _collect_html(rel, text, doc, sink, target_host)
-        elif suffix == ".js":
-            _collect_js(rel, text, doc, sink)
-        elif suffix in (".json", ".map"):
-            _collect_json(rel, text, doc, sink)
-        else:
-            _collect_text(rel, text, doc, sink)
+        _collect_item(rel, rel, data, sink, vault, target_host, depth=0)
 
     rows = sorted(sink.rows, key=lambda r: (r["path"], r["offset"], r["carrier"], r["extraction"]))
     for index, row in enumerate(rows, start=1):

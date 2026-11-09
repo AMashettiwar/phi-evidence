@@ -78,10 +78,49 @@ def write_findings(findings: list[dict], index_path: Path, vault_root: Path,
     return written
 
 
+def redact_pdf_bytes(data: bytes, terms: list[str] | None = None) -> bytes | None:
+    """True glyph-stripping PDF redaction using PyMuPDF (pymupdf).
+
+    Removes underlying text glyphs, images, annotations, form fields, XMP/Info
+    metadata, and incremental revision history (`garbage=4`) so nothing can be
+    recovered from the PDF stream.
+    """
+    try:
+        import pymupdf as fitz  # noqa: PLC0415
+
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        doc.set_metadata({})
+        try:
+            doc.del_xml_metadata()
+        except Exception:  # noqa: BLE001
+            pass
+        for page in doc:
+            for annot in list(page.annots() or []):
+                page.delete_annot(annot)
+            for widget in list(page.widgets() or []):
+                page.delete_widget(widget)
+            if terms:
+                for term in terms:
+                    if not term:
+                        continue
+                    for rect in page.search_for(term):
+                        page.add_redact_annot(rect, text="[REDACTED]", fill=(0, 0, 0),
+                                              text_color=(1, 1, 1))
+            else:
+                page.add_redact_annot(page.rect, fill=(0, 0, 0))
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+        return doc.tobytes(garbage=4, clean=True, deflate=True)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        doc.close()
+
+
 def write_redacted(findings: list[dict], source: Path, out: Path) -> int:
     """Copy the tree, then blank the record each identifier sits in."""
-    from .vault import Vault  # noqa: PLC0415
-
     source = Path(source)
     out = Path(out)
     spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -97,9 +136,15 @@ def write_redacted(findings: list[dict], source: Path, out: Path) -> int:
         rel = path.relative_to(source).as_posix()
         data = path.read_bytes()
         if rel in spans and not _is_text(rel):
-            # A binary container cannot be byte-patched without corrupting it.
-            # Removing the file is the honest redaction; a mutated PDF that no
-            # longer parses is worse than no file at all.
+            if rel.lower().endswith(".pdf"):
+                redacted_pdf = redact_pdf_bytes(data)
+                if redacted_pdf is not None:
+                    target = out / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(redacted_pdf)
+                    written += 1
+                    continue
+            # A binary container that cannot be safely rewritten is removed.
             dropped.append(rel)
             continue
         if rel in spans:
