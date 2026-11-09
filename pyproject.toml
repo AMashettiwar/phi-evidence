@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "phi-scan"
 version = "0.1.0"
 description = "Read-only scanner that finds patient data exposed by a website or health system, and explains each finding in plain English."
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 # Direct dependencies. requirements.lock pins every transitive one; install from it.
 dependencies = [
     "pyyaml==6.0.3",

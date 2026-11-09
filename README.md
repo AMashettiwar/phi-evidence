@@ -70,10 +70,10 @@ commit pass on one machine and fail in CI.
 
 The interactive demo is [`app.py`](app.py). Streamlit Community Cloud hosts it for free.
 
-1. Push this repository to GitHub (the `main` branch).
+1. Push this repository to GitHub (the `main` branch). `requirements.txt` must be in the repo root. Community Cloud uses the first dependency file it finds, and `requirements.txt` is preferred over `pyproject.toml`. Without it, Cloud runs Poetry and the install fails.
 2. Open [share.streamlit.io](https://share.streamlit.io), sign in with GitHub, and choose **New app**.
 3. Select this repository, branch `main`, and main file `app.py`.
-4. Advanced settings: Python **3.11**. Deploy.
+4. Click **Advanced settings** and set Python to **3.11**. Community Cloud ignores `runtime.txt`. If this app was already created on Python 3.14, delete it and deploy it again with 3.11 selected. Python cannot be changed on an existing app.
 
 The first boot installs the pinned scanner and the Tesseract OCR package from [`packages.txt`](packages.txt). When the app opens it scans a built-in multi-modal sample (scanned PDF, faux-redacted PDF, email, tracker hash, FHIR). Use the tabs for file upload, pasted clinical text, and a live crawl of the synthetic clinic. Findings stay masked. Download `findings.json`, SARIF, the HTML report, or a redacted zip from the report.
 
