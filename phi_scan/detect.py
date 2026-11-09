@@ -33,7 +33,8 @@ from pathlib import Path
 from .clinical import health, health_positions
 from .negatives import PREDICATES, Record
 from .normalize import normalize
-from .validators import mbi_valid
+from .validators import (estimate_k_anonymity, ipv6_public, mbi_valid,
+                         restricted_zip3, udi_valid, vin_valid)
 from .lexicon import NAME_STOP, suppression_reason
 from .severity import HIGH_CARRIERS, WITHHOLD_CARRIERS, audience, decide
 
@@ -1059,6 +1060,11 @@ def _labelled_ids(text: str) -> list[str]:
             if sum(ch.isdigit() for ch in m.group(1)) >= 3]
 
 
+VIN_TOKEN = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
+UDI_TOKEN = re.compile(r"\(01\)\d{14}(?:\((?:11|17|10|21)\)[A-Za-z0-9\-/]{2,})+")
+IPV6_TOKEN = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")
+
+
 def extended_identifiers(text: str) -> list[str]:
     """Identifiers this tool does not decide a finding on, but must record.
 
@@ -1078,6 +1084,15 @@ def extended_identifiers(text: str) -> list[str]:
     extra.extend(_labelled_ids(text))
     for match in AGE_OVER.finditer(text):
         extra.append(match.group(0).strip())
+    for match in VIN_TOKEN.finditer(text):
+        if vin_valid(match.group(0)):
+            extra.append(match.group(0))
+    for match in UDI_TOKEN.finditer(text):
+        if udi_valid(match.group(0)):
+            extra.append(match.group(0))
+    for match in IPV6_TOKEN.finditer(text):
+        if ipv6_public(match.group(0)):
+            extra.append(match.group(0))
     return extra
 
 
@@ -1409,38 +1424,53 @@ def _resolve_people(findings: list[dict]) -> None:
 
 
 # Quasi-identifiers (Sweeney 2000: ZIP + birth date + sex single out most people).
-# No census table is bundled, so k is not estimated; the three-field rule stands
-# in for k < 11.
-QUASI_ZIP = re.compile(r"(?i:\bzip(?:[\s_-]*code)?\W{0,4})(\d{5})\b|\b[A-Z]{2}\s+(\d{5})\b")
+# Uses the bundled US Census 3-digit / 5-digit ZIP population table in validators.py
+# to estimate equivalence-class size k and flag when k < 11 (Spec 2.4).
+QUASI_ZIP = re.compile(
+    r"(?i:\bzip(?:3|[\s_-]*code)?\W{0,4})(\d{3,5})\b|\b[A-Z]{2}\s+(\d{5})\b"
+)
 QUASI_DOB_LABEL = re.compile(r"\b(?:dob|date[\s_-]*of[\s_-]*birth|birth[\s_-]*date|born)\W{0,4}", re.I)
+QUASI_YEAR = re.compile(r"(?:19|20)\d{2}\b")
 QUASI_SEX = re.compile(r"\b(?:sex|gender)\W{0,4}(?:female|male|woman|man|f|m)\b", re.I)
 
 
 def _quasi_zip(text: str) -> str | None:
-    """The ZIP of a record that has all three quasi-identifiers, else None."""
+    """The ZIP of a record whose estimated Census equivalence-class size k < 11."""
     zipped = QUASI_ZIP.search(text)
     if not zipped or not QUASI_SEX.search(text):
         return None
+    zip_val = zipped.group(1) or zipped.group(2)
     for label in QUASI_DOB_LABEL.finditer(text):
-        if any(p.match(text, label.end()) for p in (DOB, DATE_US, DATE_MONTH)):
-            return zipped.group(1) or zipped.group(2)
+        exact_dob = any(p.match(text, label.end()) for p in (DOB, DATE_US, DATE_MONTH))
+        year_only = not exact_dob and bool(QUASI_YEAR.match(text, label.end()))
+        if not exact_dob and not year_only:
+            continue
+        if len(zip_val) == 3 and not restricted_zip3(zip_val) and not exact_dob:
+            continue
+        k = estimate_k_anonymity(zip_val, has_exact_dob=exact_dob, has_sex=True,
+                                 has_rare_dx=health(text)[0])
+        if k < 11:
+            return zip_val
     return None
 
 
 HEX64 = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+HEX32 = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
 
 
 def _hashed_forms(texts) -> dict[str, tuple[str, str]]:
-    """SHA-256 of every email and phone seen, as trackers send them.
+    """SHA-256 and MD5 of emails, phones, MRNs, and SSNs seen, as trackers send them.
 
-    Trackers hash a lowercased, trimmed email or a digits-only phone (with or
-    without the country code 1) instead of sending the value. Plain SHA-256 is
-    held in memory for this comparison only and is never written anywhere.
+    Trackers (Meta Pixel, GA4, Segment, ad beacons) hash a lowercased, trimmed
+    email, digits-only phone, or record/SSN identifier before transmission.
+    Hashes are held in memory for this comparison only and never written out.
     """
     forms: dict[str, tuple[str, str]] = {}
 
     def add(kind: str, plain: str, normalised: str) -> None:
-        forms[hashlib.sha256(normalised.encode("utf-8")).hexdigest()] = (kind, plain)
+        raw = normalised.encode("utf-8")
+        forms[hashlib.sha256(raw).hexdigest()] = (kind, plain)
+        forms[hashlib.md5(raw).hexdigest()] = (kind, plain)  # noqa: S324
 
     for text in texts:
         for match in EMAIL.finditer(text):
@@ -1452,6 +1482,15 @@ def _hashed_forms(texts) -> dict[str, tuple[str, str]]:
             if len(digits) == 10:
                 add("phone", match.group(0), digits)
                 add("phone", match.group(0), "1" + digits)
+        for match in MRN.finditer(text):
+            val = match.group(0).strip()
+            add("mrn", val, val)
+            add("mrn", val, val.lower())
+        for match in SSN.finditer(text):
+            if ssn_valid(match.group(0)):
+                val = match.group(0).strip()
+                add("ssn", val, val)
+                add("ssn", val, re.sub(r"\D", "", val))
     return forms
 
 
@@ -1760,28 +1799,30 @@ def detect(index_path: Path, vault_root: Path,
                 "_ids": [digest(v) for v in ids.get("ids", [])],
             })
 
-    # Trackers send the SHA-256 of an email or phone instead of the value.
+    # Trackers send the SHA-256 or MD5 of an email, phone, MRN or SSN instead of the value.
     outbound = [row for row in rows if row["carrier"] in ("third_party", "url")
                 and row["obs_id"] in texts]
     forms = _hashed_forms(texts.values()) if outbound else {}
     for row in outbound:
-        for match in HEX64.finditer(texts[row["obs_id"]].lower()):
-            if match.group(0) not in forms:
-                continue
-            kind, plain = forms[match.group(0)]
-            findings.append({
-                "path": row["path"], "carrier": row["carrier"],
-                "obs_id": row["obs_id"], "doc": row["doc"],
-                "offset": row["offset"], "length": row["length"],
-                "context_offset": row["offset"], "context_length": row["length"],
-                "value_hashes": [digest(plain)],
-                "extraction": "hashed_identifier",
-                "evidence_grade": row["grade"],
-                "identifiers": [kind], "sensitive": [], "level": "critical",
-                "rules": rules_for(row["carrier"], []),
-                "value_mask": mask(plain), "value_hash": digest(plain),
-                "_names": [], "_ids": [],
-            })
+        lowered_obs = texts[row["obs_id"]].lower()
+        for pattern in (HEX64, HEX32):
+            for match in pattern.finditer(lowered_obs):
+                if match.group(0) not in forms:
+                    continue
+                kind, plain = forms[match.group(0)]
+                findings.append({
+                    "path": row["path"], "carrier": row["carrier"],
+                    "obs_id": row["obs_id"], "doc": row["doc"],
+                    "offset": row["offset"], "length": row["length"],
+                    "context_offset": row["offset"], "context_length": row["length"],
+                    "value_hashes": [digest(plain)],
+                    "extraction": "hashed_identifier",
+                    "evidence_grade": row["grade"],
+                    "identifiers": [kind], "sensitive": [], "level": "critical",
+                    "rules": rules_for(row["carrier"], []),
+                    "value_mask": mask(plain), "value_hash": digest(plain),
+                    "_names": [], "_ids": [],
+                })
 
     # Covered-entity: a document holding identifiers is reported even if no
     # single span held both an identity and a diagnosis. Silence is the worst

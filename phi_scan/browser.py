@@ -119,9 +119,10 @@ class Guard:
         return (self.stopped is None and parsed.netloc in self.hosts
                 and parsed.path not in self.blocked_paths and not SIGN_OUT.search(parsed.path))
 
-    def refuse(self, url: str, method: str, headers: dict) -> None:
+    def refuse(self, url: str, method: str, headers: dict, post_data: str | None = None) -> None:
         self.refused.append({"url": url, "method": method,
-                             "referer": headers.get("referer", "")})
+                             "referer": headers.get("referer", ""),
+                             "post_data": post_data or ""})
 
     def wait(self) -> None:
         if len(self.sent) >= self.page_cap * 4:
@@ -214,7 +215,11 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
             """
             if not guard.allowed(request.url):
                 if guard.stopped is None:
-                    guard.refuse(request.url, request.method, request.headers)
+                    try:
+                        post_body = request.post_data
+                    except Exception:  # noqa: BLE001
+                        post_body = None
+                    guard.refuse(request.url, request.method, request.headers, post_body)
                 route.abort()
                 return
             if request.method not in ("GET", "HEAD"):
@@ -289,6 +294,7 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
 
         status, _, body = fetch(context.request, base + NOT_FOUND_PROBE, store=False)
         not_found = body if status == 200 else None
+        ignore_robots = bool(scope.get("ignore_robots") or scope.get("respect_robots") is False)
         robots = urllib.robotparser.RobotFileParser()
         status, _, body = fetch(context.request, base + "/robots.txt")
         robots.parse(body.decode("utf-8", "replace").splitlines()
@@ -298,6 +304,8 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         if status == 200:
             queue += re.findall(r"<loc>(.*?)</loc>", body.decode("utf-8", "replace"))
         seen: set[str] = set()
+        robots_blocked: list[str] = []
+        pages_read = 0
         page = context.new_page()
         try:
             while queue and len(seen) < guard.page_cap and guard.stopped is None:
@@ -307,8 +315,10 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 if url in seen or url in assets or not guard.allowed(url):
                     continue
                 seen.add(url)
-                if not robots.can_fetch("*", url):
+                if not ignore_robots and not robots.can_fetch("*", url):
+                    robots_blocked.append(url)
                     continue
+                pages_read += 1
                 if Path(urlparse(url).path).suffix not in PAGE_SUFFIXES:
                     fetch(context.request, url)
                     continue
@@ -336,7 +346,18 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
                 except PlaywrightError as error:
                     skip(f"links of {rel}", error)
                     continue
-                links = sorted({urljoin(page.url, h) for h in HREF.findall(content)})
+                dom_links: list[str] = []
+                try:
+                    dom_links = page.evaluate(
+                        """() => Array.from(document.querySelectorAll(
+                        'a[href], area[href], iframe[src], embed[src], object[data]'))
+                        .map(el => el.getAttribute('href') || el.getAttribute('src') || el.getAttribute('data'))
+                        .filter(Boolean)"""
+                    ) or []
+                except PlaywrightError:
+                    dom_links = []
+                links = sorted({urljoin(page.url, h) for h in (HREF.findall(content) + dom_links)
+                                if not h.startswith(("javascript:", "mailto:", "tel:", "data:", "#"))})
                 queue += [link for link in links if link not in seen and guard.allowed(link)]
             # Storage, IndexedDB and cookies belong to the origin, not a page:
             # read them once, after every script on every page has run. Each
@@ -380,9 +401,12 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
         finally:
             context.close()
             browser.close()
+        if pages_read == 0 and robots_blocked and guard.stopped is None:
+            guard.stopped = f"blocked by robots.txt (0 pages read, {len(robots_blocked)} disallowed)"
         for attempt in guard.refused:
+            body_line = f"\nBody: {attempt['post_data']}" if attempt.get("post_data") else ""
             runtime.append(("third_party", "third_party",
-                            f"{attempt['method']} {attempt['url']}\nReferer: {attempt['referer']}"))
+                            f"{attempt['method']} {attempt['url']}\nReferer: {attempt['referer']}{body_line}"))
         blobs["har"] = har.read_bytes()
         manifest = collect(mirror, out, key=key, target_host=urlparse(base).netloc)
 
@@ -406,7 +430,8 @@ def capture(scope_path: Path, out: Path, key: bytes | None = None) -> dict:
     record = {
         "target": base,
         "scan_as": me["name"] if me else "public visitor",
-        "pages": len(seen),
+        "pages": pages_read,
+        "pages_blocked_by_robots": len(robots_blocked),
         "requests_sent": len(guard.sent),
         "requests_refused_out_of_scope": len(guard.refused),
         "write_requests_blocked": len(guard.writes_blocked),

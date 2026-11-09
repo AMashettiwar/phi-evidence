@@ -43,7 +43,7 @@ SPELLED = re.compile(
     re.I)
 SUBSTITUTED = re.compile(r"(?<![A-Za-z0-9])[0-9OoIl|][0-9OoIl|-]*[0-9OoIl|](?![A-Za-z0-9])")
 ID_SHAPE = re.compile(r"\d{3}-?\d{2}-?\d{4}|\d{5,10}")
-B64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+B64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}|\beyJ[A-Za-z0-9+/_-]{20,}={0,2}")
 
 
 def _fold_homoglyphs(text: str) -> str:
@@ -81,8 +81,12 @@ def _unsubstitute(match: re.Match) -> str:
 def _decoded_runs(text: str) -> list[str]:
     found = []
     for run in B64_RUN.findall(text):
+        padded = run + "=" * (-len(run) % 4)
         try:
-            decoded = base64.b64decode(run + "=" * (-len(run) % 4), validate=False).decode("utf-8")
+            raw = (base64.urlsafe_b64decode(padded)
+                   if "-" in run or "_" in run
+                   else base64.b64decode(padded, validate=False))
+            decoded = raw.decode("utf-8")
         except (binascii.Error, UnicodeDecodeError, ValueError):
             continue
         if decoded and sum(c.isprintable() for c in decoded) / len(decoded) > 0.95:
