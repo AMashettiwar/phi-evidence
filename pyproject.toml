@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phi-scan"
+version = "0.1.0"
+description = "Read-only scanner that finds patient data exposed by a website or health system, and explains each finding in plain English."
+requires-python = ">=3.11"
+# Direct dependencies. requirements.lock pins every transitive one; install from it.
+dependencies = [
+    "pyyaml==6.0.3",
+    "spacy==3.7.5",
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl",
+    # Clinical NER (brief 5): disease and chemical mentions.
+    "scispacy==0.6.2",
+    "en_ner_bc5cdr_md @ https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz",
+    "cryptography==50.0.2",      # vault: AES-256-GCM
+    "playwright==1.64.1",        # live capture; then: python -m playwright install chromium
+    "pypdf==6.21.4",
+]
+
+[project.optional-dependencies]
+# Evaluation and gates: the Presidio arm, schema checks, the corpus generator.
+eval = ["presidio_analyzer==2.2.366", "jsonschema==4.26.0", "faker==40.44.0", "pytest==9.2.0"]
+
+[project.scripts]
+phi-scan = "phi_scan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["phi_scan*"]

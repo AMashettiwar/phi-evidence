@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phi-evidence.local/finding.schema.json",
+  "title": "phi-scan canonical findings",
+  "description": "findings.json: one object per finding. No value, token, vault address or timestamp.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["finding_id", "path", "carrier", "extraction", "offset", "length", "identifiers",
+                 "value_mask", "level", "rules", "evidence_grade"],
+    "properties": {
+      "finding_id": {"type": "string", "pattern": "^f\\d{5}$"},
+      "path": {"type": "string"},
+      "carrier": {"type": "string"},
+      "extraction": {"type": "string"},
+      "offset": {"type": "integer", "minimum": 0},
+      "length": {"type": "integer", "minimum": 1},
+      "context_offset": {"type": "integer", "minimum": 0},
+      "context_length": {"type": "integer", "minimum": 0},
+      "identifiers": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "sensitive": {"type": "array", "items": {"type": "string"}},
+      "value_mask": {"type": "string"},
+      "level": {"enum": ["critical", "high", "medium", "review"]},
+      "rules": {"type": "array", "items": {"enum": ["phi_definition", "expert_determination",
+        "safe_harbor", "actual_knowledge", "permitted_disclosure", "reproductive_health",
+        "transmission_security", "access_control_audit", "activity_review",
+        "accounting_of_disclosures", "part2_sud", "gina"]}},
+      "evidence_grade": {"enum": ["A", "B", "C"]},
+      "person": {"type": "string", "pattern": "^p\\d{3,}$"}
+    }
+  }
+}

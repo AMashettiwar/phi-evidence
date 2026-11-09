@@ -1,0 +1,108 @@
+review_id,text,reviewer_a,reviewer_b,notes
+R01,"Preferences Preferences sessionStorage.setItem('last_patient', JSON.stringify({name: 'Joanna Mccullough', dx: 'alcohol dependence on naltrexone'})); Parking is available behind the main building.",,,
+R02,"Meet the team Dr. Kimberly Petrova, MD is a Psychiatry specialist at our clinic (NPI 2449407255).",,,
+R03,"Preferences Preferences sessionStorage.setItem('last_patient', JSON.stringify({name: 'Michael Mckenzie', dx: 'invasive ductal carcinoma stage IIIA'})); All content is provided for general information.",,,
+R04,"Thank you for visiting our community site.
+NOTE: Martin Huang - diagnosis moderate persistent asthma
+",,,
+R05,Community health notes Questions answered What is opioid use disorder in remission? It is a condition your clinician can explain and manage with you.,,,
+R06,"This page is updated by the communications team.
+NOTE: Chloé Hernández - diagnosis prenatal care at 28 weeks gestation
+",,,
+R07,"Provider directory Dr. Mary Lindqvist, MD - Psychiatry - NPI 1200131971",,,
+R08,Community health notes Care team bulletin Opening hours are listed on the main page. Kimberly Hurley schizophrenia on clozapine,,,
+R09,Lab results for Scott Torres - bipolar disorder type I Your results Thank you for visiting our community site.,,,
+R10,"Opening hours are listed on the main page.
+Ashley Ross was seen today for chronic kidney disease stage 4.
+",,,
+R11,Community health notes Care team bulletin Our volunteers meet in the common room. Patient Condition Bethany Nwosu chronic obstructive pulmonary disease,,,
+R12,Community health notes Care team bulletin This page is updated by the communications team. Hannah Suarez: primary open-angle glaucoma,,,
+R13,"Community health notes ""I live with prostate cancer under active surveillance. The support group helped."" Laura Nwosu Names and details changed.",,,
+R14,"Health guide
+What to know about prostate cancer under active surveillance: signs, screening, treatment options.
+",,,
+R15,"Our team Dr. Felicia Green, MD Cardiology 1831001775",,,
+R16,Community health notes Care team bulletin Parking is available behind the main building. Amanda Copeland is being treated for generalized anxiety disorder.,,,
+R17,Community health notes Questions answered What is moderate persistent asthma? It is a condition your clinician can explain and manage with you.,,,
+R18,"Our volunteers meet in the common room.
+NOTE: Denise Schultz - diagnosis rheumatoid arthritis on methotrexate
+",,,
+R19,Lab results for Clinton Le - HIV preexposure prophylaxis follow-up Your results All content is provided for general information.,,,
+R20,Community health notes Care team bulletin Parking is available behind the main building. Ashley Mercer is being treated for relapsing-remitting multiple sclerosis.,,,
+R21,Care team Care team Amara Stone - invasive ductal carcinoma stage IIIA Opening hours are listed on the main page.,,,
+R22,"{
+  ""testimonial"": {
+    ""name"": ""Alfred Raghunathan"",
+    ""condition"": ""primary open-angle glaucoma"",
+    ""consent_note"": ""Names and details changed""
+  }
+}
+",,,
+R23,Community health notes Care team bulletin Please contact the front desk with any questions. Wendy Okafor plaque psoriasis,,,
+R24,"Community health notes ""I live with Huntington disease. The support group helped."" Chloé Bhatt Shared with written permission.",,,
+R25,"Thank you for visiting our community site.
+Follow-up list:
+- Charles Mejia (plaque psoriasis)
+",,,
+R26,"Community health notes Annual meeting Keynote speaker: Mary Quintanilla, Volunteer coordinator.",,,
+R27,"Community health notes Cheryl Wells, living with hypothyroidism on levothyroxine Fictional account",,,
+R28,"Community newsletter
+Volunteer of the month: Nicole Smith, Board treasurer. Please contact the front desk with any questions.
+",,,
+R29,"Welcome back document.cookie = ""patient=Mark%20Torres; dx=cystic+fibrosis+F508del+homozygous; path=/""; Welcome back This page is updated by the communications team.",,,
+R30,"Meet the team Dr. Jason Vincent, DO is a Cardiology specialist at our clinic (NPI 1275509242).",,,
+R31,Care team Care team Lisa Turner - alcohol dependence on naltrexone All content is provided for general information.,,,
+R32,Community health notes Care team bulletin Parking is available behind the main building. David Walker atrial fibrillation on apixaban,,,
+R33,"Community health notes Chloé Hernández, living with hyperlipidaemia on atorvastatin Dramatisation based on composite cases",,,
+R34,Community health notes Care team bulletin Parking is available behind the main building. Megan Allen migraine without aura,,,
+R35,Care team Care team Summary Parking is available behind the main building.,,,
+R36,Community health notes Care team bulletin Our volunteers meet in the common room. Deanna Carroll is being treated for moderate persistent asthma.,,,
+R37,"Health guide
+What to know about schizophrenia on clozapine: signs, screening, treatment options.
+",,,
+R38,"Please contact the front desk with any questions.
+Memo to team: please call William Higgins regarding female infertility under evaluation.
+",,,
+R39,"{
+  ""testimonial"": {
+    ""name"": ""Stacie Huerta"",
+    ""condition"": ""stimulant use disorder"",
+    ""consent_note"": ""Dramatisation based on composite cases""
+  }
+}
+",,,
+R40,"Provider profile Provider profile {""@context"": ""https://schema.org"", ""@type"": ""Physician"", ""honorificPrefix"": ""Dr."", ""name"": ""Kristopher Moore"", ""medicalSpecialty"": ""Neurology"", ""identifier"": ""1029650086""} Please contact the front desk with any questions.",,,
+R41,"Our team Dr. Patrick Brown, MD Neurology 1297855201",,,
+R42,"Community health notes Annual meeting Keynote speaker: Jacob Al-Rashid, Board treasurer.",,,
+R43,Community health notes Joseph Snow - Board treasurer,,,
+R44,"Meet the team Dr. Amara Richard, MD is a Medical Oncology specialist at our clinic (NPI 2138290921).",,,
+R45,"Community health notes ""I live with generalized anxiety disorder. The support group helped."" Marissa Kovacs Published with the person's consent.",,,
+R46,"Community health notes Please welcome Margaret Ochoa, our new Volunteer coordinator. This page is updated by the communications team.",,,
+R47,"Community health notes ""I live with migraine without aura. The support group helped."" Tyler Levy Dramatisation based on composite cases.",,,
+R48,"Community health notes Please welcome Daniel Reyes, our new Board treasurer. Please contact the front desk with any questions.",,,
+R49,Community health notes Care team bulletin Our volunteers meet in the common room. Barbara Russell reports ongoing type 2 diabetes mellitus.,,,
+R50,Community health notes Questions answered What is major depressive disorder recurrent? It is a condition your clinician can explain and manage with you.,,,
+R51,"Community health notes Health guide Learn about hypothyroidism on levothyroxine: common signs, screening and treatment options. This page is updated by the communications team.",,,
+R52,Care team Care team Thank you for visiting our community site.,,,
+R53,Community health notes Care team bulletin This page is updated by the communications team. Care note: Rhonda Müller presents with non-small cell lung cancer.,,,
+R54,"{
+  ""providers"": [
+    {
+      ""name"": ""Dr. Kevin Klein, DO"",
+      ""specialty"": ""Endocrinology"",
+      ""npi"": ""2779556556""
+    }
+  ]
+}
+",,,
+R55,"Please contact the front desk with any questions.
+Wayne Sparks was seen today for relapsing-remitting multiple sclerosis.
+",,,
+R56,"Community health notes José Davis, living with moderate persistent asthma Fictional account",,,
+R57,"All content is provided for general information.
+Follow-up list:
+- Michael Yoder (HIV preexposure prophylaxis follow-up)
+",,,
+R58,Community health notes Care team bulletin Our volunteers meet in the common room. Patient Condition Ashley Jones gastro-oesophageal reflux disease,,,
+R59,"Community health notes Matthew Davila, living with HIV-1 infection on antiretroviral therapy Names and details changed",,,
+R60,Lab results for Christopher Gonzalez - moderate persistent asthma Your results Opening hours are listed on the main page.,,,

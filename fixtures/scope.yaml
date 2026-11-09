@@ -1,0 +1,27 @@
+# Written authorisation for scanning the synthetic fixture site (brief 4.1).
+#
+# A real engagement replaces this file with the signed scope. The accounts are
+# provisioned test accounts: the scanner presents their session cookies and
+# never submits a login form.
+
+target: http://127.0.0.1:8801
+in_scope:
+  hosts: ["127.0.0.1:8801"]
+out_of_scope:
+  # The tracker sink is observed through what pages send it, never requested.
+  hosts: ["127.0.0.1:8802"]
+  paths: ["/logout"]
+accounts:
+  - name: A
+    cookie: "sid=acct-a-4f1c9e"
+    patient_id: "30"
+  - name: B
+    cookie: "sid=acct-b-8d27b3"
+    patient_id: "31"
+scan_as: A
+rate_limit:
+  concurrency: 1
+  min_interval_seconds: 1.0
+  jitter_seconds: 0.25
+  page_cap: 200
+stop_conditions: [http_429, server_error_streak_3, page_cap, out_of_scope_redirect]

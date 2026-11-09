@@ -1,0 +1,8 @@
+{
+  "world_key_sha256": "94d8dffefbcd2ec91119b95382eb6465dd444b079b24f736ce9d5e6c1f449a0e",
+  "corpus_key_sha256": "eda6d00af4f06be14d6ef0e2557cd8ada5c4e9dec0ad4fc68d8e6b596b043835",
+  "protocol_sha256": "3fbb2455b36012fe2116530d56dc04314c5ea0752a65a5dd75b4562e0dcd32f6",
+  "frozen_on": "2026-11-02",
+  "generators_at_commit": "a991baa4a62665d2d717a3e60e3045e1397033a8",
+  "note": "Frozen before the first scored run. Any change to a key invalidates every score."
+}
