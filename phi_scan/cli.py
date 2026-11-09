@@ -117,6 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect_cmd.add_argument("--source", required=True)
     collect_cmd.add_argument("--out", required=True)
     collect_cmd.add_argument("--pylibs", default=None)
+
+    serve_cmd = sub.add_parser("serve", help="run the interactive E2E compliance bot web server")
+    serve_cmd.add_argument("--host", default="127.0.0.1")
+    serve_cmd.add_argument("--port", type=int, default=43821)
     return parser
 
 
@@ -176,6 +180,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         manifest = collect(source, Path(args.out), args.pylibs)
         print(json.dumps(manifest, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "serve":
+        from .bot_server import run_server  # noqa: PLC0415
+
+        run_server(host=args.host, port=args.port)
         return 0
 
     return 2

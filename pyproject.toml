@@ -18,6 +18,12 @@ dependencies = [
     "cryptography==50.0.2",      # vault: AES-256-GCM
     "playwright==1.64.1",        # live capture; then: python -m playwright install chromium
     "pypdf==6.21.4",
+    "pymupdf>=1.24.0",           # deep PDF inspection, embedded image extraction, glyph redaction
+    "pillow>=10.0.0",            # raster image decoding for OCR
+    "pytesseract>=0.3.10",       # OCR for scanned PDFs, images, and DICOM pixel frames
+    "fastapi>=0.115.0",          # E2E compliance bot web server & API
+    "uvicorn>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

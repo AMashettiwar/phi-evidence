@@ -59,6 +59,7 @@ Scan something of your own:
 ```bash
 python -m phi_scan.cli scan --source ./my-export --out ./artifacts/mine
 python -m phi_scan.cli crawl --url https://example.com --out ./artifacts/site
+python -m phi_scan.cli serve --host 127.0.0.1 --port 43821
 ```
 
 The spaCy model is required and pinned in `requirements.lock`. A missing model is
