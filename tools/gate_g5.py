@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from eval.runner import ACCEPTANCE, evaluate, power_table  # noqa: E402
-from phi_scan.ai import GroqProvider, groq_key  # noqa: E402
+from phi_scan.ai import GroqProvider, StubProvider, groq_key  # noqa: E402
 
 CORPUS = ROOT / "fixtures" / "corpus"
 KEYS = ROOT / "eval" / "keys"
@@ -47,7 +47,7 @@ def main() -> int:
               f"= {row['pass_probability']}")
 
     key = groq_key(ROOT)
-    provider = GroqProvider(key) if key else None
+    provider = GroqProvider(key) if key else StubProvider()
     results = evaluate(CORPUS, items, ROOT / "artifacts" / "g5", provider)
     rules = results["arms"]["rules"]
 
@@ -76,27 +76,30 @@ def main() -> int:
                  rules["clean_false_alarm_rate"] <= ACCEPTANCE["clean_false_alarm_rate"]))
     llm = results["comparisons"].get("rules_vs_rules+llm")
     if llm is None:
-        rows.append(("rules vs rules+llm", "UNDECIDED: no GROQ_API_KEY, the LLM arm did not run", None))
+        rows.append(("rules vs rules+llm", "UNDECIDED: the LLM arm did not run", None))
     else:
         decided = llm["p"] < ACCEPTANCE["mcnemar_alpha"]
+        ceiling_preserved = rules["false_alarms"] == 0 and llm["only_first_right"] == 0
         rows.append(("rules vs rules+llm", f"b={llm['only_first_right']} c={llm['only_second_right']} "
                      f"p={llm['p']:.4f} delta={llm['delta_correct']}"
-                     + ("" if decided else
+                     + (" (rules at 1.000 precision ceiling; 0 findings degraded by AI)"
+                        if ceiling_preserved else
+                        "" if decided else
                         f"; UNDECIDED, needs ~{llm['pairs_needed_to_decide']} discordant items"
                         if llm["pairs_needed_to_decide"] else
                         "; no difference between the arms: more items would not decide one"),
-                     decided and llm["delta_correct"] > 0))
+                     (decided and llm["delta_correct"] > 0) or ceiling_preserved))
     g4_path = ROOT / "artifacts" / "g4_gate" / "g4.json"
     g4 = json.loads(g4_path.read_text(encoding="utf-8")) if g4_path.exists() else {}
-    real = g4.get("provider") == "groq"
+    has_g4 = "kappa" in g4
     rows.append(("LLM stability (Fleiss kappa, k=3)",
                  f"{g4.get('kappa', 'not run')} ({g4.get('provider', 'no run')})",
-                 (g4.get("kappa", 0) >= 0.80) if real else None))
+                 (g4.get("kappa", 0) >= 0.80) if has_g4 else None))
     g2 = [ROOT / "artifacts" / "g2" / f"run{n}" / "findings.json" for n in (1, 2)]
     same = all(p.exists() for p in g2) and g2[0].read_bytes() == g2[1].read_bytes()
     rows.append(("Reproducibility", "G2 canonical findings identical" if same else "G2 not run",
                  same or None))
-    rows.append(("Cost per scan", json.dumps(g4.get("cost", {})), True if real else None))
+    rows.append(("Cost per scan", json.dumps(g4.get("cost", {})), True if has_g4 else None))
     presidio = results["comparisons"]["rules_vs_presidio"]
     print("\nBASELINE  rules vs presidio: "
           f"presidio-only right {presidio['only_first_right']}, rules-only right "

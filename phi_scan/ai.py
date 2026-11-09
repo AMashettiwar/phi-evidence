@@ -35,17 +35,49 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .detect import DOB, EMAIL, IPV4, MRN, PHONE, SSN, name_spans
+from .detect import (
+    DATE_COMPACT,
+    DATE_MONTH,
+    DATE_US,
+    DATETIME,
+    D_MON,
+    DOB,
+    EMAIL,
+    IPV4,
+    IPV6_TOKEN,
+    MBI,
+    MRN,
+    PHONE,
+    PLAN,
+    SSN,
+    STREET,
+    UDI_TOKEN,
+    VIN_TOKEN,
+    ZIP_CODE,
+    name_spans,
+)
 
 B64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 PLACEHOLDERS = (
     (MRN, "[RECORD_NUMBER]"),
     (SSN, "[SSN]"),
+    (MBI, "[PLAN_ID]"),
+    (UDI_TOKEN, "[DEVICE_ID]"),
+    (VIN_TOKEN, "[VEHICLE_ID]"),
+    (PLAN, "[PLAN_ID]"),
+    (STREET, "[ADDRESS]"),
+    (DATETIME, "[DATE]"),
     (DOB, "[DATE]"),
+    (DATE_US, "[DATE]"),
+    (DATE_MONTH, "[DATE]"),
+    (D_MON, "[DATE]"),
+    (DATE_COMPACT, "[DATE]"),
     (PHONE, "[PHONE]"),
     (EMAIL, "[EMAIL]"),
     (IPV4, "[IP]"),
+    (IPV6_TOKEN, "[IP]"),
+    (ZIP_CODE, "[ZIP]"),
     # An encoded payload is patient data wearing a disguise. A model can decode
     # it, so it must never reach one. Remove it whole rather than trying to
     # redact inside it.
@@ -185,12 +217,14 @@ class StubProvider(Provider):
 
     def review(self, request: Request) -> dict:
         context = request.redacted_context.lower()
-        if "npi" in context or "dr." in context:
+        if "npi" in context and "dr." in context:
             assessment = "staff"
-        elif "placeholder" in context or "sample" in context or "example" in context:
+        elif "placeholder" in context or "sample card" in context or "for example" in context:
             assessment = "synthetic"
         elif any(word in context for word in
-                 ("carcinoma", "hiv", "diabetes", "depress", "variant", "sclerosis", "hepatitis")):
+                 ("carcinoma", "hiv", "diabetes", "depress", "variant", "sclerosis", "hepatitis",
+                  "asthma", "lymphoma", "leukemia", "epilepsy", "glaucoma", "cirrhosis", "copd",
+                  "bipolar", "schizophrenia", "pregnan", "oncology", "diagnosis", "patient")):
             assessment = "patient"
         else:
             assessment = "unclear"
@@ -438,6 +472,12 @@ def review_all(findings: list[dict], vault, provider: Provider | None = None,
             # placeholder. It called 16 base64-hidden leaks "synthetic" in G5;
             # it may not clear evidence it never saw.
             reviewed["ai"]["applied"] = "keep: the model could not see the encoded record"
+        elif (finding.get("sensitive") or finding.get("extraction") == "labelled_record") \
+                and reviewed["ai"].pop("proposes_review", False):
+            # A structured clinical record or heightened-sensitivity diagnosis
+            # is already deterministically backed; the AI may explain it, not
+            # demote it to Review (Rulebook section 7 & 10).
+            reviewed["ai"]["applied"] = "keep: verified clinical record"
         annotated.append(reviewed)
 
     # The suppression cap: in finding order, at most REVIEW_CAP of the scan's

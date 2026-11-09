@@ -110,3 +110,18 @@ def test_moving_to_review_is_capped_and_never_for_always_flag():
     assert len(moved) == 2  # 25% of 10
     assert all("mrn" not in f["identifiers"] for f in moved)
     assert all(f["level"] in ("critical", "high") for f in out if "mrn" in f["identifiers"])
+
+
+def test_redact_masks_extended_hipaa_identifiers():
+    from phi_scan.ai import redact
+
+    raw = (
+        "Patient Emeka Delgado resides at 742 Evergreen Terrace, Duluth, MN 55803. "
+        "DOB: 04/18/1965, MBI: 1EG4-TE5-MK73, VIN: 1M8GDM9AXKP042788, "
+        "UDI: (01)00844588003288(17)251231, IP: 2607:f8b0:4005:805::200e."
+    )
+    redacted, count = redact(raw)
+    assert count >= 6
+    for secret in ("Emeka Delgado", "742 Evergreen Terrace", "55803", "04/18/1965",
+                   "1EG4-TE5-MK73", "1M8GDM9AXKP042788", "00844588003288", "2607:f8b0"):
+        assert secret not in redacted, f"Unredacted identifier leaked to LLM: {secret}"
