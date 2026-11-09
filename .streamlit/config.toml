@@ -1,7 +1,8 @@
 [server]
 headless = true
-address = "0.0.0.0"
-port = 8501
+# Community Cloud's file watcher overflows inotify and the process exits,
+# which the platform reports as a failed health check.
+fileWatcherType = "none"
 maxUploadSize = 50
 enableXsrfProtection = true
 

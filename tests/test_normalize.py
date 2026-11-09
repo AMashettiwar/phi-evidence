@@ -27,6 +27,19 @@ def test_substitution_inside_dashed_identifiers():
     assert normalize("Room 1O, floor 2") == "Room 1O, floor 2"
 
 
+def test_clinical_model_off_uses_the_term_list_only(monkeypatch):
+    import phi_scan.clinical as clinical
+
+    monkeypatch.setenv("PHI_SCAN_CLINICAL_MODEL", "off")
+    monkeypatch.setattr(clinical, "_MODEL", None)
+    sample = "hosted-demo-only: diagnosed with carcinoma"
+    try:
+        assert clinical.entities(sample) == []
+        assert clinical.health(sample)[0]
+    finally:
+        clinical._CACHE.pop(sample, None)
+
+
 def test_names_are_not_diseases_and_cells_are_read():
     from phi_scan.clinical import health
     assert health("Please welcome David Graves, our new treasurer.", ["David Graves"]) == (False, [])

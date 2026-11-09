@@ -78,6 +78,7 @@ WORDLIKE = re.compile(r"^[A-Za-z][A-Za-z0-9 ,'/()\-.]*$")
 REAL_WORD = re.compile(r"[A-Za-z]{3,}")
 
 _MODEL = None
+_MODEL_OFF = object()
 _CACHE: dict[str, list[tuple[str, str]]] = {}
 _CACHE_MAX = 50000
 _OVERFLOW: dict[str, list[tuple[str, str]]] = {}  # one batch's answers once the cache is full
@@ -85,12 +86,23 @@ MAX_CHARS = 20000
 
 
 def _model():
+    """The biomedical NER model, or None when it is switched off.
+
+    ``PHI_SCAN_CLINICAL_MODEL=off`` skips the load. The BC5CDR package keeps a
+    multi-million-key vector table and uses about 1.6 GB on load, which is
+    more than Streamlit Community Cloud gives the process. The term list in
+    ``health()`` still marks the conditions it knows.
+    """
     global _MODEL
     if _MODEL is None:
-        import spacy  # noqa: PLC0415
+        raw = os.environ.get("PHI_SCAN_CLINICAL_MODEL", "en_ner_bc5cdr_md")
+        if raw.strip().lower() in {"", "none", "off", "lexicon", "0"}:
+            _MODEL = _MODEL_OFF
+        else:
+            import spacy  # noqa: PLC0415
 
-        _MODEL = spacy.load(os.environ.get("PHI_SCAN_CLINICAL_MODEL", "en_ner_bc5cdr_md"))
-    return _MODEL
+            _MODEL = spacy.load(raw)
+    return None if _MODEL is _MODEL_OFF else _MODEL
 
 
 def entities(text: str) -> list[tuple[str, str]]:
@@ -103,8 +115,15 @@ def entities_many(texts: list[str]) -> list[list[tuple[str, str]]]:
     answers as one call each, without the per-call overhead: a FHIR server's
     page split into 30,000 table cells took eight minutes one at a time."""
     missing = list(dict.fromkeys(t for t in texts if t not in _CACHE))
-    if missing:
-        docs = _model().pipe((american(t[:MAX_CHARS]) for t in missing), batch_size=256)
+    model = _model()
+    if missing and model is None:
+        for text in missing:
+            if len(_CACHE) < _CACHE_MAX:
+                _CACHE[text] = []
+            else:
+                _OVERFLOW[text] = []
+    elif missing:
+        docs = model.pipe((american(t[:MAX_CHARS]) for t in missing), batch_size=256)
         for text, doc in zip(missing, docs):
             found = [(e.text, e.label_) for e in doc.ents]
             if len(_CACHE) < _CACHE_MAX:

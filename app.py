@@ -21,6 +21,7 @@ from collections import Counter
 from http.server import ThreadingHTTPServer
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -28,6 +29,11 @@ import sys
 import tempfile
 import threading
 import zipfile
+
+# Streamlit Community Cloud kills the process around 1 GB. Loading the
+# BC5CDR model allocates about 1.6 GB and the health check then sees a
+# connection reset. The clinical term list still runs.
+os.environ.setdefault("PHI_SCAN_CLINICAL_MODEL", "off")
 
 import streamlit as st
 import yaml
@@ -177,7 +183,9 @@ st.title("🩺 phi-scan — Autonomous HIPAA & PHI Exposure Evidence Bot")
 st.caption(
     "Read-only multi-modal scanner (Websites, SPAs, Scanned PDFs + OCR, Unflattened PDF Redactions, "
     "DICOM, FHIR/HL7/X12, Outbound Trackers) with AES-256-GCM Encrypted Evidence Vault. "
-    "Every value shown is masked; raw patient values never appear in reports."
+    "Every value shown is masked; raw patient values never appear in reports. "
+    "This hosted app leaves the large biomedical NER model unloaded so it stays under "
+    "Streamlit Community Cloud's memory limit. Conditions on the built-in clinical list still match."
 )
 
 with st.sidebar:
@@ -344,13 +352,15 @@ with tab_policy:
     )
 
 if "last_result" not in st.session_state:
-    mm_init = Path(tempfile.mkdtemp(prefix="phi-init-"))
-    _build_multimodal_demo(mm_init)
-    st.session_state["last_result"] = _run_pipeline_on_dir(
-        mm_init, "public-web", "stub (deterministic, offline)", "Multi-Modal E2E Hospital Suite"
-    )
+    # Do not scan on first paint. That load is what Community Cloud's health
+    # check hits, and a crash there is reported as "connection reset by peer".
+    st.session_state["last_result"] = None
 
-res = st.session_state["last_result"]
+res = st.session_state.get("last_result")
+if not res:
+    st.divider()
+    st.info("No scan yet. Open **1. Instant Benchmark Suites** and press **Run Benchmark Scan**.")
+    st.stop()
 findings = res["findings"]
 levels = Counter(f["level"] for f in findings)
 carriers = Counter(f["carrier"] for f in findings)
