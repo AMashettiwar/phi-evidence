@@ -66,6 +66,24 @@ The spaCy model is required and pinned in `requirements.lock`. A missing model i
 an error, not a silent fallback to regex names: that fallback once let the same
 commit pass on one machine and fail in CI.
 
+### Run the free Streamlit demo (no local Python setup)
+
+The interactive demo is [`app.py`](app.py). Streamlit Community Cloud hosts it for free.
+
+1. Push this repository to GitHub (the `main` branch).
+2. Open [share.streamlit.io](https://share.streamlit.io), sign in with GitHub, and choose **New app**.
+3. Select this repository, branch `main`, and main file `app.py`.
+4. Advanced settings: Python **3.11**. Deploy.
+
+The first boot installs the pinned scanner and the Tesseract OCR package from [`packages.txt`](packages.txt). When the app opens it scans a built-in multi-modal sample (scanned PDF, faux-redacted PDF, email, tracker hash, FHIR). Use the tabs for file upload, pasted clinical text, and a live crawl of the synthetic clinic. Findings stay masked. Download `findings.json`, SARIF, the HTML report, or a redacted zip from the report.
+
+Local Streamlit, if you already have Python 3.11:
+
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
+```
+
 ### Verify the whole thing
 
 ```bash

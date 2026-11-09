@@ -1,0 +1,13 @@
+# Streamlit Community Cloud (Python 3.11).
+# requirements.lock pins the scanner. The pins below keep Streamlit on NumPy 1.26:
+# current PyArrow needs NumPy 2, which this lock does not use.
+-r requirements.lock
+streamlit==1.67.0
+pyarrow==18.1.0
+pandas==2.2.3
+pymupdf>=1.24.0
+pillow>=10.0.0
+pytesseract>=0.3.10
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
