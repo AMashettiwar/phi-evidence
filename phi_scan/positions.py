@@ -165,6 +165,7 @@ def write_redacted(findings: list[dict], source: Path, out: Path) -> int:
         written += 1
 
     if dropped:
+        out.mkdir(parents=True, exist_ok=True)
         (out / "REMOVED.txt").write_text(
             "These binary containers were removed rather than patched, because\n"
             "byte-level redaction corrupts them:\n\n" + "\n".join(sorted(dropped)) + "\n",

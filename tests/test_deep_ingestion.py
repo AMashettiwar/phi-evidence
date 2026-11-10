@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from phi_scan.collect import collect
 from phi_scan.detect import detect
-from phi_scan.positions import redact_pdf_bytes
+from phi_scan.positions import redact_pdf_bytes, write_redacted
 
 
 def _render_text_png(line: str) -> bytes:
@@ -157,3 +157,19 @@ def test_rtf_eml_and_nested_archives(tmp_path: Path) -> None:
     assert "consult.eml" in paths
     assert "export_bundle.zip" in paths
     assert "backup.tar.gz" in paths
+
+
+def test_removed_note_is_written_when_only_binaries_are_dropped(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "scan.png").write_bytes(b"\x89PNG\r\nnot-a-real-image")
+    findings = [{
+        "path": "scan.png",
+        "context_offset": 0,
+        "context_length": 4,
+    }]
+    out = tmp_path / "redacted"
+    written = write_redacted(findings, source, out)
+    note = (out / "REMOVED.txt").read_text(encoding="utf-8")
+    assert written == 0
+    assert "scan.png" in note

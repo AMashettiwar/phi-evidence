@@ -341,14 +341,14 @@ with tab_policy:
         [{"id": r["id"], "citation": r["citation"], "title": r["title"],
           "contested": r.get("contested", False), "plain_meaning": r["plain_meaning"].strip()}
          for r in rules_data],
-        use_container_width=True,
+        width="stretch",
     )
     st.subheader("18 HIPAA Safe Harbor Identifiers (45 CFR §164.514(b)(2)(i)(A)–(R))")
     st.dataframe(
         [{"letter": i["letter"], "key": i["key"], "label": i["label"],
           "citation": i["citation"], "always_flag": i["always_flag"], "mask": i["mask_example"]}
          for i in ids_data],
-        use_container_width=True,
+        width="stretch",
     )
 
 if "last_result" not in st.session_state:
@@ -411,10 +411,10 @@ st.dataframe(
         "rules": ", ".join(f["rules"]),
         "AI review": (f.get("ai") or {}).get("explanation", ""),
     } for f in findings],
-    use_container_width=True,
+    width="stretch",
     height=400,
 )
 
 if res["cleared"]:
     with st.expander(f"Cleared Records — 8 Evidence-Backed Negative Predicates ({len(res['cleared'])} cleared)"):
-        st.dataframe(res["cleared"], use_container_width=True)
+        st.dataframe(res["cleared"], width="stretch")
